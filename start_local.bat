@@ -4,7 +4,8 @@ REM ^ кодовая страница консоли на UTF-8 — иначе �
 setlocal
 cd /d "%~dp0"
 
-REM Этот файл запускает веб-панель локально на Windows.
+REM Этот файл поднимает ВЕСЬ сайт локально на Windows: и веб-панель, и
+REM воркера (ответы в Telegram) — двумя отдельными окнами.
 REM НЕ открывайте файлы из app\templates\ напрямую в браузере — это
 REM серверные шаблоны, они рендерятся только через этот запущенный сервер.
 
@@ -35,17 +36,23 @@ if not exist "venv\Scripts\python.exe" (
     )
     call venv\Scripts\activate.bat
     pip install -r requirements.txt
-) else (
-    call venv\Scripts\activate.bat
 )
 
 echo.
-echo [*] Запускаю сервер на http://localhost:8000
-echo     Окно должно оставаться открытым, пока вы пользуетесь панелью.
-echo     Чтобы остановить сервер — закройте это окно или нажмите Ctrl+C.
+echo [*] Запускаю сайт: веб-панель + воркер (ответы в Telegram)
+echo     Откроются ДВА окна — «AI Responder - site» и «AI Responder - worker».
+echo     Не закрывайте их, пока пользуетесь системой: закрытие окна = остановка
+echo     этой части (панели или воркера). Если что-то упало — окно останется
+echo     открытым с текстом ошибки (не закроется само).
 echo.
 
-start "" cmd /c "timeout /t 2 >nul & start http://localhost:8000"
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+REM Через venv\Scripts\python.exe явно (не просто "python") — каждое окно это
+REM отдельный процесс, который не наследует activate.bat из этого скрипта.
+start "AI Responder - site" cmd /k venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+timeout /t 4 /nobreak >nul
+start "AI Responder - worker" cmd /k venv\Scripts\python.exe run_worker.py
 
-pause
+start "" cmd /c "timeout /t 2 >nul & start http://localhost:8000"
+
+echo Запущено: панель http://localhost:8000
+timeout /t 3 /nobreak >nul
