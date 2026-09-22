@@ -1,0 +1,359 @@
+{% extends "base.html" %}
+{% block title %}Настройки{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div class="page-eyebrow">// system · settings</div>
+  <h1>Настройки</h1>
+  <p>Системный промпт и база знаний используются во всех диалогах; глобальный переключатель мгновенно останавливает все аккаунты.</p>
+</div>
+
+{% if message %}<div class="alert alert-info">{{ message }}</div>{% endif %}
+
+<div class="card p-3 mb-3">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <div>
+      <h6 class="mb-1"><i class="bi bi-power me-1"></i> Глобальный автоответчик</h6>
+      <div class="section-hint">Выключает ответы сразу на всех аккаунтах, минуя индивидуальные тумблеры.</div>
+    </div>
+    <form method="post" action="/settings/global-toggle">
+      <button class="btn {{ 'btn-success' if global_enabled else 'btn-outline-secondary' }}">
+        {{ "Включено для всех" if global_enabled else "Выключено для всех" }}
+      </button>
+    </form>
+  </div>
+</div>
+
+<div class="card p-3 mb-3">
+  <h6 class="mb-1"><i class="bi bi-clock-history me-1"></i> Расписание работы</h6>
+  <div class="section-hint mb-2">
+    Вне рабочих часов и во время перерыва ИИ не отвечает — входящее сообщение
+    всё равно появится на странице «Логи», менеджер увидит его по возвращении.
+    Действует на все аккаунты сразу.
+  </div>
+  <form method="post" action="/settings/schedule">
+    <div class="form-check form-switch mb-2">
+      <input class="form-check-input" type="checkbox" role="switch" id="work-hours-enabled" name="work_hours_enabled" {{ "checked" if schedule.work_hours_enabled else "" }}>
+      <label class="form-check-label small" for="work-hours-enabled">Ограничивать по рабочим часам</label>
+    </div>
+    <div id="work-windows">
+      {% for w in schedule.work_windows %}
+      <div class="row g-2 mb-2 window-row align-items-center">
+        <div class="col-sm-3">
+          <input type="time" name="work_start" class="form-control form-control-sm" value="{{ w.start }}">
+        </div>
+        <div class="col-sm-3">
+          <input type="time" name="work_end" class="form-control form-control-sm" value="{{ w.end }}">
+        </div>
+        <div class="col-auto">
+          <button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest('.window-row').remove()">
+            <i class="bi bi-trash3"></i>
+          </button>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    <button type="button" class="btn btn-sm btn-outline-secondary mb-3" onclick="addScheduleWindow('work-windows', 'work_start', 'work_end')">
+      <i class="bi bi-plus-lg"></i> Добавить период работы
+    </button>
+
+    <div class="form-check form-switch mb-2">
+      <input class="form-check-input" type="checkbox" role="switch" id="break-enabled" name="break_enabled" {{ "checked" if schedule.break_enabled else "" }}>
+      <label class="form-check-label small" for="break-enabled">Учитывать перерыв (обед)</label>
+    </div>
+    <div id="break-windows">
+      {% for w in schedule.break_windows %}
+      <div class="row g-2 mb-2 window-row align-items-center">
+        <div class="col-sm-3">
+          <input type="time" name="break_start" class="form-control form-control-sm" value="{{ w.start }}">
+        </div>
+        <div class="col-sm-3">
+          <input type="time" name="break_end" class="form-control form-control-sm" value="{{ w.end }}">
+        </div>
+        <div class="col-auto">
+          <button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest('.window-row').remove()">
+            <i class="bi bi-trash3"></i>
+          </button>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    <button type="button" class="btn btn-sm btn-outline-secondary mb-3" onclick="addScheduleWindow('break-windows', 'break_start', 'break_end')">
+      <i class="bi bi-plus-lg"></i> Добавить период перерыва
+    </button>
+
+    <div class="form-check form-switch mb-2">
+      <input class="form-check-input" type="checkbox" role="switch" id="keep-active-enabled" name="keep_active_dialog_enabled" {{ "checked" if schedule.keep_active_dialog_enabled else "" }}>
+      <label class="form-check-label small" for="keep-active-enabled">Не обрывать уже начатый диалог с клиентом вне расписания</label>
+    </div>
+    <div class="row g-2 mb-2">
+      <div class="col-sm-4">
+        <label class="form-label small mb-1">Таймаут бездействия клиента, мин</label>
+        <input type="number" name="keep_active_dialog_minutes" min="1" class="form-control form-control-sm" value="{{ schedule.keep_active_dialog_minutes }}">
+      </div>
+    </div>
+    <div class="section-hint mb-2">
+      Если включено: пока клиент, с которым ИИ уже переписывался, не молчит
+      дольше указанного времени — ответы продолжаются, даже если наступил
+      перерыв или рабочий день закончился. Как только клиент замолкает
+      дольше таймаута, ограничение по расписанию снова начинает действовать.
+    </div>
+
+    <button class="btn btn-primary btn-sm">Сохранить расписание</button>
+  </form>
+</div>
+
+<div class="card p-3 mb-3" id="protection">
+  <h6 class="mb-1"><i class="bi bi-shield-check me-1"></i> Защита аккаунтов: проверки, темп ответов, автостоп</h6>
+  <div class="section-hint mb-3">Действует на все аккаунты и подхватывается воркером без перезапуска. Принцип: клиент может подождать, аккаунт важнее.</div>
+  <form method="post" action="/settings/protection">
+
+    <h6 class="small text-uppercase text-muted mb-2">Пул api_id: несколько аккаунтов на одно приложение</h6>
+    <div class="row g-2 mb-2">
+      <div class="col-sm-4">
+        <label class="form-label small mb-1">Максимум аккаунтов на один api_id</label>
+        <input type="number" min="1" max="10" name="api_pool_max_accounts" class="form-control form-control-sm" value="{{ prot.api_pool_max_accounts }}">
+      </div>
+    </div>
+    <div class="section-hint mb-3">
+      При добавлении аккаунта («Аккаунты» → «Добавить аккаунт») можно выбрать уже существующий
+      пул api_id вместо создания нового приложения — тогда шаг my.telegram.org пропускается,
+      сразу идёт вход в Telegram. Официальные клиенты Telegram сами используют один api_id на
+      всех пользователей — это не признак связи аккаунтов. Прокси, сессия и профиль устройства
+      при этом всё равно остаются уникальными для каждого аккаунта. Рекомендуемый диапазон — 3–10.
+    </div>
+
+    <h6 class="small text-uppercase text-muted mb-2">Период проверки обновлений</h6>
+    <div class="row g-2 mb-3">
+      <div class="col-sm-3">
+        <label class="form-label small mb-1">Режим</label>
+        <select name="checking_preset" id="checking-preset" class="form-select form-select-sm">
+          <option value="standard" {{ "selected" if prot.checking_preset == "standard" else "" }}>Стандарт (60 с, разброс 30%)</option>
+          <option value="realistic" {{ "selected" if prot.checking_preset == "realistic" else "" }}>Реалистичный (90 с, высокий разброс 60%)</option>
+          <option value="quiet" {{ "selected" if prot.checking_preset == "quiet" else "" }}>Тихий (180 с, минимум запросов)</option>
+          <option value="custom" {{ "selected" if prot.checking_preset == "custom" else "" }}>Свои значения</option>
+        </select>
+      </div>
+      <div class="col-sm-3">
+        <label class="form-label small mb-1">Проверка обновлений, с</label>
+        <input type="number" min="15" name="poll_interval_seconds" id="f-poll" class="form-control form-control-sm" value="{{ prot.poll_interval_seconds }}">
+      </div>
+      <div class="col-sm-3">
+        <label class="form-label small mb-1">Разброс, %</label>
+        <input type="number" min="0" max="90" name="poll_jitter_pct" id="f-jitter" class="form-control form-control-sm" value="{{ prot.poll_jitter_pct }}">
+      </div>
+      <div class="col-sm-3">
+        <label class="form-label small mb-1">Проверка непрочитанных, с</label>
+        <input type="number" min="60" name="catchup_interval_seconds" id="f-catchup" class="form-control form-control-sm" value="{{ prot.catchup_interval_seconds }}">
+      </div>
+    </div>
+    <div class="section-hint mb-3">Если выбран не «Свои значения», числа берутся из режима. Чем реже и «размазаннее» проверки, тем меньше машинного ритма (по умолчанию было ~15 с).</div>
+
+    <h6 class="small text-uppercase text-muted mb-2">Темп ответов</h6>
+    <div class="row g-2 mb-2">
+      <div class="col-sm-4">
+        <label class="form-label small mb-1">Формат</label>
+        <select name="reply_mode" class="form-select form-select-sm">
+          <option value="sticky" {{ "selected" if prot.reply_mode == "sticky" else "" }}>Сессия: сначала быстро, потом медленнее</option>
+          <option value="fixed" {{ "selected" if prot.reply_mode == "fixed" else "" }}>Фиксированный диапазон</option>
+        </select>
+      </div>
+      <div class="col-sm-4">
+        <label class="form-label small mb-1">Конец сессии после простоя, мин</label>
+        <input type="number" min="1" name="session_idle_minutes" class="form-control form-control-sm" value="{{ prot.session_idle_minutes }}">
+      </div>
+      <div class="col-sm-4">
+        <label class="form-label small mb-1">Разброс характера сессии (0–1.5)</label>
+        <input type="number" step="0.05" min="0" max="1.5" name="spread" class="form-control form-control-sm" value="{{ prot.spread }}">
+      </div>
+    </div>
+    <div class="row g-2 mb-2">
+      <div class="col-sm-3"><label class="form-label small mb-1">Быстрых ответов в начале сессии</label>
+        <input type="number" min="0" name="fast_replies" class="form-control form-control-sm" value="{{ prot.fast_replies }}"></div>
+      <div class="col-sm-3"><label class="form-label small mb-1">Быстро: от, с</label>
+        <input type="number" step="0.5" min="0" name="fast_delay_min" class="form-control form-control-sm" value="{{ prot.fast_delay_min }}"></div>
+      <div class="col-sm-3"><label class="form-label small mb-1">Быстро: до, с</label>
+        <input type="number" step="0.5" min="0" name="fast_delay_max" class="form-control form-control-sm" value="{{ prot.fast_delay_max }}"></div>
+      <div class="col-sm-3"><label class="form-label small mb-1">Замедление за N ответов</label>
+        <input type="number" min="1" name="ramp_replies" class="form-control form-control-sm" value="{{ prot.ramp_replies }}"></div>
+    </div>
+    <div class="row g-2 mb-2">
+      <div class="col-sm-3"><label class="form-label small mb-1">Медленно: от, с</label>
+        <input type="number" step="1" min="0" name="slow_delay_min" class="form-control form-control-sm" value="{{ prot.slow_delay_min }}"></div>
+      <div class="col-sm-3"><label class="form-label small mb-1">Медленно: до, с</label>
+        <input type="number" step="1" min="0" name="slow_delay_max" class="form-control form-control-sm" value="{{ prot.slow_delay_max }}"></div>
+      <div class="col-sm-3"><label class="form-label small mb-1">Потолок задержки, с</label>
+        <input type="number" min="5" name="max_delay_seconds" class="form-control form-control-sm" value="{{ prot.max_delay_seconds }}"></div>
+      <div class="col-sm-3"><label class="form-label small mb-1">Скорость «печати», симв./с</label>
+        <input type="number" step="0.5" min="1" name="typing_cps" class="form-control form-control-sm" value="{{ prot.typing_cps }}"></div>
+    </div>
+    <div class="row g-2 mb-2">
+      <div class="col-sm-3"><label class="form-label small mb-1">Фикс. режим: от, с</label>
+        <input type="number" step="0.5" min="0" name="fixed_delay_min" class="form-control form-control-sm" value="{{ prot.fixed_delay_min }}"></div>
+      <div class="col-sm-3"><label class="form-label small mb-1">Фикс. режим: до, с</label>
+        <input type="number" step="0.5" min="0" name="fixed_delay_max" class="form-control form-control-sm" value="{{ prot.fixed_delay_max }}"></div>
+    </div>
+    <div class="section-hint mb-3">В режиме «сессия» аккаунт ведёт себя как менеджер, взявший телефон: первые ответы быстрые, дальше темп замедляется; «характер» сессии (быстрее/медленнее обычного) выбирается случайно на её старте и держится до конца. Время работы нейросети входит в задержку, «печатает…» показывается пропорционально длине ответа.</div>
+
+    <h6 class="small text-uppercase text-muted mb-2">Автостоп при FloodWait / PeerFlood</h6>
+    <div class="form-check form-switch mb-2">
+      <input class="form-check-input" type="checkbox" role="switch" id="flood-on" name="flood_stop_enabled" {{ "checked" if prot.flood_stop_enabled else "" }}>
+      <label class="form-check-label small" for="flood-on">Останавливать аккаунт целиком при флуде (без запросов к Telegram на время паузы)</label>
+    </div>
+    <div class="row g-2 mb-2">
+      <div class="col-sm-3"><label class="form-label small mb-1">Запас к требованию Telegram, с</label>
+        <input type="number" min="0" name="flood_extra_pause_seconds" class="form-control form-control-sm" value="{{ prot.flood_extra_pause_seconds }}"></div>
+      <div class="col-sm-3"><label class="form-label small mb-1">Множитель роста при повторах</label>
+        <input type="number" step="0.1" min="1" max="10" name="flood_multiplier" class="form-control form-control-sm" value="{{ prot.flood_multiplier }}"></div>
+      <div class="col-sm-3"><label class="form-label small mb-1">Потолок паузы, с</label>
+        <input type="number" min="60" name="flood_max_pause_seconds" class="form-control form-control-sm" value="{{ prot.flood_max_pause_seconds }}"></div>
+      <div class="col-sm-3"><label class="form-label small mb-1">Сброс серии через, ч</label>
+        <input type="number" min="1" name="flood_reset_hours" class="form-control form-control-sm" value="{{ prot.flood_reset_hours }}"></div>
+    </div>
+    <div class="row g-2 mb-2">
+      <div class="col-sm-4"><label class="form-label small mb-1">Пауза при PeerFlood, мин</label>
+        <input type="number" min="1" name="peer_flood_pause_minutes" class="form-control form-control-sm" value="{{ prot.peer_flood_pause_minutes }}"></div>
+    </div>
+    <div class="section-hint mb-3">Пауза = (требование Telegram + запас) × множитель<sup>(серия−1)</sup>, но не короче требования Telegram и не длиннее потолка; +0…15% случайного разброса. PeerFlood (ограничение аккаунта) — отдельная длинная пауза. Пока пауза идёт, сообщения клиентов сохраняются в «Логи», ответ уходит после паузы (если сообщение не устарело).</div>
+
+    <h6 class="small text-uppercase text-muted mb-2">Возрастной порог ответа</h6>
+    <div class="form-check form-switch mb-2">
+      <input class="form-check-input" type="checkbox" role="switch" id="age-on" name="reply_age_enabled" {{ "checked" if prot.reply_age_enabled else "" }}>
+      <label class="form-check-label small" for="age-on">Не отвечать на сообщения старше порога</label>
+    </div>
+    <div class="row g-2 mb-2">
+      <div class="col-sm-4"><label class="form-label small mb-1">Порог, мин</label>
+        <input type="number" min="1" name="reply_age_minutes" class="form-control form-control-sm" value="{{ prot.reply_age_minutes }}"></div>
+    </div>
+    <div class="section-hint mb-3">Защищает от «залпа» ответов на вчерашние сообщения после простоя или паузы. Выключите переключатель — ИИ ответит на любое непрочитанное независимо от возраста. Пропущенные сообщения остаются в «Логи».</div>
+
+    <button class="btn btn-primary btn-sm">Сохранить защиту</button>
+  </form>
+</div>
+
+<div class="card p-3 mb-3">
+  <h6 class="mb-1"><i class="bi bi-cpu me-1"></i> Нейросеть</h6>
+  <div class="section-hint mb-2">
+    Провайдер и модель, которые генерируют ответы. Ключ для выбранного
+    провайдера должен быть задан ниже или в <code>.env</code> — иначе
+    воркер запишет ошибку в столбец «Ошибка» на странице «Аккаунты».
+  </div>
+  <form method="post" action="/settings/llm" class="row g-2 align-items-end">
+    <div class="col-sm-4">
+      <label class="form-label small mb-1">Провайдер</label>
+      <select name="provider" class="form-select form-select-sm">
+        {% for p in providers %}
+          <option value="{{ p.key }}" {{ "selected" if p.key == llm_provider else "" }}>
+            {{ p.label }}{{ "" if p.key_configured else " — ключ не задан" }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-sm-4">
+      <label class="form-label small mb-1">Модель (необязательно)</label>
+      <input type="text" name="model" class="form-control form-control-sm" value="{{ llm_model }}" placeholder="по умолчанию для провайдера">
+    </div>
+    <div class="col-sm-4">
+      <label class="form-label small mb-1">Base URL (необязательно)</label>
+      <input type="text" name="base_url" class="form-control form-control-sm" value="{{ llm_base_url }}" placeholder="по умолчанию для провайдера">
+    </div>
+    <div class="col-12">
+      <button class="btn btn-primary btn-sm">Сохранить</button>
+    </div>
+  </form>
+
+  <hr class="my-3" style="border-color: var(--panel-border);">
+
+  <h6 class="small text-uppercase text-muted mb-2">Ключи API</h6>
+  {% for p in providers %}
+  <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
+    <div style="min-width:130px" class="small">{{ p.label.split(' (')[0] }}</div>
+    <form method="post" action="/settings/llm-key" class="d-flex gap-1 flex-grow-1" style="min-width:200px">
+      <input type="hidden" name="provider" value="{{ p.key }}">
+      <input
+        type="password"
+        name="api_key"
+        class="form-control form-control-sm"
+        autocomplete="off"
+        placeholder="{{ 'ключ задан — оставьте пустым, чтобы не менять' if p.key_configured else 'вставьте API-ключ' }}"
+      >
+      <button class="btn btn-sm btn-outline-secondary">Сохранить</button>
+    </form>
+    {% if p.panel_key_configured %}
+    <form method="post" action="/settings/llm-key/clear">
+      <input type="hidden" name="provider" value="{{ p.key }}">
+      <button class="btn btn-sm btn-outline-danger" title="Удалить ключ, сохранённый в панели"><i class="bi bi-trash3"></i></button>
+    </form>
+    {% endif %}
+    <span class="badge {{ 'bg-success' if p.key_configured else 'bg-secondary' }}">
+      {% if p.panel_key_configured %}✓ из панели{% elif p.env_key_configured %}✓ из .env ({{ p.env_var }}){% else %}не задан{% endif %}
+    </span>
+  </div>
+  {% endfor %}
+  <div class="section-hint mt-1">
+    Ключ, вставленный здесь, приоритетнее значения из <code>.env</code> —
+    сам ключ на экран повторно не выводится, только отметка, что он задан.
+  </div>
+</div>
+
+<div class="card p-3 mb-3">
+  <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-1">
+    <h6 class="mb-0"><i class="bi bi-chat-square-text me-1"></i> Системный промпт</h6>
+    <div class="form-check form-switch mb-0">
+      <input class="form-check-input" type="checkbox" role="switch" id="prompt-enabled" name="enabled" form="prompt-form" {{ "checked" if prompt_enabled else "" }}>
+      <label class="form-check-label small" for="prompt-enabled">Использовать в ответах ИИ</label>
+    </div>
+  </div>
+  <div class="section-hint mb-2">Общие правила поведения ИИ (тон, ограничения). Применяется ко всем аккаунтам. Текст сохраняется даже при выключении — просто не отправляется нейросети.</div>
+  <form id="prompt-form" method="post" action="/settings/prompt-template">
+    <textarea name="content" class="form-control mb-2" rows="8">{{ prompt_text }}</textarea>
+    <button class="btn btn-primary btn-sm">Сохранить промпт</button>
+  </form>
+</div>
+
+<div class="card p-3 mb-3">
+  <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-1">
+    <h6 class="mb-0"><i class="bi bi-journal-text me-1"></i> База знаний</h6>
+    <div class="form-check form-switch mb-0">
+      <input class="form-check-input" type="checkbox" role="switch" id="kb-enabled" name="enabled" form="kb-form" {{ "checked" if kb_enabled else "" }}>
+      <label class="form-check-label small" for="kb-enabled">Использовать в ответах ИИ</label>
+    </div>
+  </div>
+  <div class="section-hint mb-2">Услуги, цены, режим работы, правила компании — передаётся в каждый запрос к нейросети. Текст сохраняется даже при выключении — просто не отправляется нейросети.</div>
+  <form id="kb-form" method="post" action="/settings/knowledge-base">
+    <textarea name="content" class="form-control mb-2" rows="14">{{ kb_text }}</textarea>
+    <button class="btn btn-primary btn-sm">Сохранить базу знаний</button>
+  </form>
+</div>
+
+<div class="card p-3">
+  <h6 class="mb-2"><i class="bi bi-signpost me-1"></i> Дисклеймер по умолчанию (из .env)</h6>
+  <p class="mb-1"><b>Имя-заглушка:</b> {{ default_manager_name }}</p>
+  <p class="mb-1"><b>Шаблон:</b> {{ default_disclaimer_template }}</p>
+  <p class="mb-0"><b>Полная заглушка (если нет имени):</b> {{ default_fallback_disclaimer }}</p>
+</div>
+
+<script>
+(function () {
+  var presets = {{ checking_presets | tojson }};
+  var sel = document.getElementById('checking-preset');
+  if (!sel) return;
+  sel.addEventListener('change', function () {
+    var p = presets[sel.value];
+    if (!p) return;
+    document.getElementById('f-poll').value = p[0];
+    document.getElementById('f-jitter').value = p[1];
+    document.getElementById('f-catchup').value = p[2];
+  });
+})();
+function addScheduleWindow(containerId, startName, endName) {
+  const container = document.getElementById(containerId);
+  const row = document.createElement('div');
+  row.className = 'row g-2 mb-2 window-row align-items-center';
+  row.innerHTML =
+    '<div class="col-sm-3"><input type="time" name="' + startName + '" class="form-control form-control-sm" value="09:00"></div>' +
+    '<div class="col-sm-3"><input type="time" name="' + endName + '" class="form-control form-control-sm" value="18:00"></div>' +
+    '<div class="col-auto"><button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest(\'.window-row\').remove()"><i class="bi bi-trash3"></i></button></div>';
+  container.appendChild(row);
+}
+</script>
+{% endblock %}

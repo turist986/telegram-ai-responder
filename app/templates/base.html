@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ru" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}AI Автоответчик{% endblock %}</title>
+    <link href="/static/vendor/bootstrap/bootstrap.min.css" rel="stylesheet">
+    <link href="/static/vendor/bootstrap-icons/bootstrap-icons.css" rel="stylesheet">
+    <link href="/static/style.css" rel="stylesheet">
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <i class="bi bi-robot"></i>
+      <span>AI_АВТООТВЕТЧИК</span>
+    </div>
+    <nav class="sidebar-nav">
+      <a href="/" class="{{ 'active' if request.url.path == '/' else '' }}">
+        <i class="bi bi-speedometer2"></i> Обзор
+      </a>
+      <a href="/accounts" class="{{ 'active' if request.url.path.startswith('/accounts') else '' }}">
+        <i class="bi bi-person-badge"></i> Аккаунты
+      </a>
+      <a href="/settings" class="{{ 'active' if request.url.path.startswith('/settings') else '' }}">
+        <i class="bi bi-sliders"></i> Настройки
+      </a>
+      <a href="/logs" class="{{ 'active' if request.url.path.startswith('/logs') else '' }}">
+        <i class="bi bi-chat-left-text"></i> Логи
+      </a>
+    </nav>
+    <div class="sidebar-status"><span class="dot"></span> SYSTEM ACTIVE</div>
+    <a href="/logout" class="sidebar-logout"><i class="bi bi-box-arrow-right"></i> Выход</a>
+  </aside>
+  <main class="main-content">
+    <div class="main-inner">
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+</div>
+</body>
+</html>

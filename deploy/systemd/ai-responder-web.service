@@ -1,0 +1,16 @@
+[Unit]
+Description=AI Auto-Responder — web dashboard (FastAPI/Gunicorn)
+After=network.target
+
+[Service]
+Type=simple
+User=ai-responder
+Group=ai-responder
+WorkingDirectory=/opt/ai-responder
+EnvironmentFile=/opt/ai-responder/.env
+ExecStart=/opt/ai-responder/venv/bin/gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w 1 -b 127.0.0.1:8000 --timeout 60
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

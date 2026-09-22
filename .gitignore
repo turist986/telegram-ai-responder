@@ -1,0 +1,44 @@
+# Секреты и окружение
+.env
+.env.*
+!.env.example
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Тестовые артефакты
+.pytest_cache/
+
+# БД проекта (реальные аккаунты, диалоги клиентов)
+data/app.db
+data/app.db-*
+
+# Сессии Telegram — ПОЛНЫЙ доступ к аккаунту, ни в коем случае не публиковать
+data/sessions/*.session
+data/sessions/*.session-journal
+data/sessions/*.session.lock
+
+# Таблица менеджеров, загруженная через панель/create_session.py (реальные ФИО/телефоны/прокси)
+data/managers.xlsx
+
+# Локальные бэкапы и экспорт диалогов — могут содержать реальные переписки с клиентами
+data/*.bak
+data/dialog_backup*.json
+# Собственный список профилей устройства — не секрет по умолчанию, но это локальная
+# настройка, а не часть шаблона проекта
+data/device_profiles.json
+
+# Логи воркера/панели (в т.ч. текст переписок, номера телефонов)
+worker.out.log
+worker.err.log
+data/worker.log
+data/worker.pid
+
+# Инструментальные файлы, не относящиеся к самому проекту
+.claude/
+
+# TData, если кто-то положит папку профиля Telegram Desktop прямо в репозиторий
+**/tdata/

@@ -1,0 +1,31 @@
+{% extends "base_auth.html" %}
+{% block title %}Вход{% endblock %}
+{% block content %}
+<div class="term-window auth-card">
+  <div class="term-titlebar">
+    <span class="term-dot red"></span>
+    <span class="term-dot yellow"></span>
+    <span class="term-dot green"></span>
+    <span class="term-title">auth.sh</span>
+  </div>
+  <div class="term-body">
+    <div class="text-center mb-3">
+      <i class="bi bi-robot" style="font-size:2rem; color: var(--accent); text-shadow: 0 0 16px var(--accent-soft);"></i>
+      <h5 class="mt-2 mb-0">AI Автоответчик</h5>
+      <div class="text-muted small">Вход в панель управления</div>
+    </div>
+    {% if error %}<div class="alert alert-danger py-2">{{ error }}</div>{% endif %}
+    <form method="post" action="/login">
+      <div class="mb-3">
+        <label class="form-label">Логин</label>
+        <input type="text" name="username" class="form-control" required autofocus>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Пароль</label>
+        <input type="password" name="password" class="form-control" required>
+      </div>
+      <button type="submit" class="btn btn-primary w-100">Войти</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

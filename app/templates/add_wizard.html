@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Добавление аккаунта{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div class="page-eyebrow">// system · accounts · add</div>
+  <h1>Добавление: {{ s.identifier }}</h1>
+  <p>{{ s.phone }} · прокси {{ s.proxy.split('@')[-1] }}{% if s.api_id and s.step != "web_code" and s.step != "manual_api" %} · api_id {{ s.api_id }} (пул){% endif %}</p>
+</div>
+
+{% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+{% if s.message %}<div class="alert {{ 'alert-danger' if s.step == 'failed' else 'alert-info' }}">{{ s.message }}</div>{% endif %}
+
+{% if s.step == "web_code" %}
+<div class="card p-3 mb-3">
+  <h6>Шаг 1 из 2 · код для my.telegram.org</h6>
+  <div class="section-hint mb-2">Так сервер создаёт собственное приложение (api_id/api_hash) именно для этого аккаунта. Ниже — то, что сейчас видит браузер сервера.</div>
+  <img id="shot" src="/accounts/add/{{ s.token }}/screenshot.png" alt="браузер сервера" class="img-fluid border rounded mb-3" style="max-width:720px">
+  <form method="post" action="/accounts/add/{{ s.token }}/web-code" class="d-flex gap-2" style="max-width:420px">
+    <input class="form-control form-control-sm" name="code" placeholder="код из Telegram" autocomplete="off" inputmode="numeric" autofocus required>
+    <button class="btn btn-primary btn-sm">Отправить</button>
+  </form>
+</div>
+{% elif s.step == "manual_api" %}
+<div class="card p-3 mb-3">
+  <h6>Ввод api_id / api_hash вручную</h6>
+  <div class="section-hint mb-2">Автоматическое создание не сработало (причина выше). Создайте приложение на my.telegram.org → «API development tools» с этого же номера и введите значения. Не заходите на my.telegram.org с IP сервера или другого прокси — только через прокси этого аккаунта.</div>
+  <form method="post" action="/accounts/add/{{ s.token }}/manual-api" class="row g-2" style="max-width:640px">
+    <div class="col-sm-4"><input class="form-control form-control-sm" name="api_id" placeholder="api_id" autocomplete="off" required></div>
+    <div class="col-sm-6"><input class="form-control form-control-sm" name="api_hash" placeholder="api_hash (32 символа)" autocomplete="off" required></div>
+    <div class="col-sm-2"><button class="btn btn-primary btn-sm w-100">Дальше</button></div>
+  </form>
+</div>
+{% elif s.step == "login_code" %}
+<div class="card p-3 mb-3">
+  <h6>Шаг 2 из 2 · код входа в Telegram</h6>
+  <form method="post" action="/accounts/add/{{ s.token }}/login-code" class="d-flex gap-2" style="max-width:420px">
+    <input class="form-control form-control-sm" name="code" placeholder="код входа" autocomplete="off" inputmode="numeric" autofocus required>
+    <button class="btn btn-primary btn-sm">Войти</button>
+  </form>
+</div>
+{% elif s.step == "password" %}
+<div class="card p-3 mb-3">
+  <h6>Облачный пароль (2FA)</h6>
+  <form method="post" action="/accounts/add/{{ s.token }}/password" class="d-flex gap-2" style="max-width:420px">
+    <input class="form-control form-control-sm" type="password" name="password" placeholder="пароль 2FA" autocomplete="new-password" autofocus required>
+    <button class="btn btn-primary btn-sm">Подтвердить</button>
+  </form>
+</div>
+{% elif s.step == "failed" %}
+<a class="btn btn-outline-secondary btn-sm" href="/accounts/add">Начать заново</a>
+{% endif %}
+
+{% if s.step not in ("failed", "done") %}
+<form method="post" action="/accounts/add/{{ s.token }}/cancel" class="mt-2">
+  <button class="btn btn-outline-danger btn-sm">Отменить</button>
+</form>
+{% endif %}
+
+<script>
+(function () {
+  var step = "{{ s.step }}", token = "{{ s.token }}";
+  var shot = document.getElementById("shot");
+  function tick() {
+    fetch("/accounts/add/" + token + "/status").then(function (r) { return r.json(); }).then(function (d) {
+      if (d.step !== step) { location.reload(); return; }
+      if (shot) shot.src = "/accounts/add/" + token + "/screenshot.png?t=" + Date.now();
+    }).catch(function () {});
+  }
+  if (step === "web_code") setInterval(tick, 3000);
+})();
+</script>
+{% endblock %}

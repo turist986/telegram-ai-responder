@@ -1,0 +1,16 @@
+[Unit]
+Description=AI Auto-Responder — Telegram worker (Telethon)
+After=network.target
+
+[Service]
+Type=simple
+User=ai-responder
+Group=ai-responder
+WorkingDirectory=/opt/ai-responder
+EnvironmentFile=/opt/ai-responder/.env
+ExecStart=/opt/ai-responder/venv/bin/python run_worker.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

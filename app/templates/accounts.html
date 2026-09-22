@@ -1,0 +1,226 @@
+{% extends "base.html" %}
+{% block title %}Аккаунты{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div class="page-eyebrow">// system · accounts</div>
+  <h1>Аккаунты менеджеров</h1>
+  <p>Загрузите сессию Telegram и синхронизируйте таблицу менеджеров, затем включайте автоответчик по каждому аккаунту.</p>
+</div>
+
+<div class="card p-3 mb-3 d-flex flex-row align-items-center justify-content-between">
+  <div>
+    <strong>Воркер (ответы в Telegram):</strong>
+    {% if worker_running %}<span class="badge bg-success">работает</span>{% else %}<span class="badge bg-secondary">остановлен</span>{% endif %}
+  </div>
+  <div class="d-flex gap-2">
+    <form method="post" action="/accounts/worker/toggle">
+      <button class="btn btn-sm {{ 'btn-outline-danger' if worker_running else 'btn-success' }}">
+        {{ "Остановить воркер" if worker_running else "Запустить воркер" }}
+      </button>
+    </form>
+    <form method="post" action="/accounts/release-accounts"
+          onsubmit="return confirm('Отключить все аккаунты от Telegram? Автоответчик перестанет отвечать, но панель продолжит работать. Затем можно заходить с Telegram Desktop. Вернуть автоответчик — кнопка «Запустить воркер» (только когда Desktop закрыт).');">
+      <button class="btn btn-sm btn-warning" title="Закрывает все подключения аккаунтов к Telegram, сайт остаётся включённым — можно заходить с Telegram Desktop">
+        <i class="bi bi-box-arrow-right"></i> Освободить для Desktop
+      </button>
+    </form>
+  </div>
+</div>
+
+{% if message %}<div class="alert alert-info">{{ message }}</div>{% endif %}
+
+<div class="card p-3 mb-3 d-flex flex-row align-items-center justify-content-between">
+  <div>
+    <strong>Новый аккаунт</strong>
+    <div class="section-hint">Вход только через прокси, собственный api_id, стабильный профиль устройства.</div>
+  </div>
+  <a class="btn btn-primary btn-sm" href="/accounts/add"><i class="bi bi-plus-lg"></i> Добавить аккаунт</a>
+</div>
+
+<div class="card p-3 mb-4">
+  <h6 class="mb-2"><i class="bi bi-key"></i> Приложения (api_id): загрузка и распределение</h6>
+  <div class="section-hint mb-2">
+    Вставьте готовые пары <code>api_id:api_hash</code> (по одной на строку, необязательная метка через пробел или
+    «:») — например, созданные заранее вручную на my.telegram.org. Дальше их можно назначить конкретному аккаунту
+    ниже в таблице или раскидать одной кнопкой по всем аккаунтам, у которых своего api_id ещё нет.
+  </div>
+  <form method="post" action="/accounts/api/upload" class="mb-3">
+    <textarea name="text" class="form-control form-control-sm mb-2" rows="3"
+              placeholder="1234567:0123456789abcdef0123456789abcdef  метка (необязательно)&#10;7654321:abcdef0123456789abcdef0123456789"></textarea>
+    <button class="btn btn-sm btn-outline-primary">Загрузить</button>
+  </form>
+
+  {% if api_pools %}
+  <div class="table-responsive mb-2">
+    <table class="table table-sm align-middle mb-0">
+      <thead><tr><th>api_id</th><th>Метка</th><th>Занято</th><th>Аккаунты</th><th></th></tr></thead>
+      <tbody>
+      {% for p in api_pools %}
+        <tr>
+          <td>{{ p.api_id }}</td>
+          <td>{{ p.label or "—" }}</td>
+          <td>{{ p.count }}/{{ pool_limit }}</td>
+          <td class="small text-muted">{{ p.members|join(', ') or "—" }}</td>
+          <td>
+            {% if p.count == 0 %}
+            <form method="post" action="/accounts/api/{{ p.api_id }}/delete"
+                  onsubmit="return confirm('Удалить неиспользуемое приложение api_id {{ p.api_id }}?');">
+              <button class="btn btn-sm btn-outline-danger" title="Удалить (не используется ни одним аккаунтом)"><i class="bi bi-trash3"></i></button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="small text-muted mb-2">Пока нет ни одного загруженного или созданного приложения.</div>
+  {% endif %}
+
+  <form method="post" action="/accounts/api/auto-distribute">
+    <button class="btn btn-sm btn-success"><i class="bi bi-shuffle"></i> Раскидать аккаунты без своего api_id по пулам с местом</button>
+  </form>
+</div>
+
+<div class="card p-3 mb-4">
+  <i class="bi bi-upload text-primary fs-5"></i>
+  <h6 class="mt-2">Excel-таблица менеджеров{% if legacy_import %} и готовые сессии{% endif %}</h6>
+  <form method="post" action="/accounts/upload" enctype="multipart/form-data">
+    <div class="row g-2 align-items-end">
+      {% if legacy_import %}
+      <div class="col-md-3">
+        <label class="form-label small mb-1">Идентификатор (как в Excel)</label>
+        <input class="form-control form-control-sm" name="identifier" placeholder="например 16368414925">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small mb-1">Сессия (.session) или TData (.zip)</label>
+        <input class="form-control form-control-sm" type="file" name="auth_file" accept=".session,.zip">
+      </div>
+      {% endif %}
+      <div class="col-md-4">
+        <label class="form-label small mb-1">Excel-таблица (.xlsx)</label>
+        <input class="form-control form-control-sm" type="file" name="excel_file" accept=".xlsx">
+      </div>
+      <div class="col-md-2">
+        <button class="btn btn-primary btn-sm w-100">Загрузить</button>
+      </div>
+    </div>
+  </form>
+  <div class="section-hint mt-2">Выберите файл сессии/TData и/или Excel (столбцы: Аккаунт, Имя менеджера, Дисклеймер, Статус, Прокси), затем нажмите «Загрузить». Идентификатор нужен только при загрузке сессии/TData.</div>
+</div>
+
+<div class="card p-3">
+  <h6 class="mb-3">Список аккаунтов</h6>
+  <div class="table-responsive">
+  <table class="table align-middle mb-0">
+    <thead>
+      <tr><th>Идентификатор</th><th>Менеджер</th><th>Дисклеймер</th><th>Пометка «ИИ» в каждом ответе</th><th>Промпт</th><th>Статус (Excel)</th><th>Прокси</th><th>Сессия</th><th>Автоответчик</th><th>Ошибка</th><th></th></tr>
+    </thead>
+    <tbody>
+    {% for a in accounts %}
+      <tr>
+        <td>{{ a.identifier }}{% if a.phone %}<div class="small text-muted">{{ a.phone }}</div>{% endif %}</td>
+        <td>{{ a.manager_name or "—" }}</td>
+        <td style="max-width:220px" class="text-truncate">{{ a.disclaimer_marker or "по умолчанию" }}</td>
+        <td>
+          <form method="post" action="/accounts/{{ a.id }}/disclaimer-mode">
+            <div class="form-check mb-0" title="Выключено: пометка «ответ сгенерирован ИИ» только в первом ответе диалога">
+              <input class="form-check-input" type="checkbox" {{ "" if a.disclaimer_every_message is false else "checked" }} onchange="this.form.submit()">
+              <label class="form-check-label small">в каждом</label>
+            </div>
+          </form>
+        </td>
+        <td style="min-width:170px">
+          <details>
+            <summary class="small">{{ "свой" if a.system_prompt else "общий" }}</summary>
+            <form method="post" action="/accounts/{{ a.id }}/prompt" class="mt-1">
+              <textarea name="system_prompt" rows="4" class="form-control form-control-sm mb-1" placeholder="Пусто = общий промпт компании">{{ a.system_prompt or "" }}</textarea>
+              <button class="btn btn-sm btn-outline-secondary w-100">Сохранить</button>
+            </form>
+          </details>
+        </td>
+        <td>{{ a.status_note or "—" }}</td>
+        {% set px = split_proxy(a.proxy) %}
+        <td style="min-width:260px">
+          <details>
+            <summary class="small">{% if a.proxy %}{{ mask_proxy(a.proxy) }}{% else %}<span class="text-danger">НЕТ ПРОКСИ — не запустится</span>{% endif %}</summary>
+            <form method="post" action="/accounts/{{ a.id }}/proxy" class="mt-2">
+              <div class="row g-1 mb-1">
+                <div class="col-4">
+                  <select name="proxy_scheme" class="form-select form-select-sm">
+                    {% for s in ["socks5", "socks4", "http"] %}<option value="{{ s }}" {{ "selected" if px.scheme == s else "" }}>{{ s }}</option>{% endfor %}
+                  </select>
+                </div>
+                <div class="col-5"><input name="proxy_host" class="form-control form-control-sm" placeholder="IP / хост" value="{{ px.host }}"></div>
+                <div class="col-3"><input name="proxy_port" class="form-control form-control-sm" placeholder="порт" value="{{ px.port }}"></div>
+              </div>
+              <div class="row g-1 mb-1">
+                <div class="col-6"><input name="proxy_user" class="form-control form-control-sm" placeholder="логин" value="{{ px.user }}" autocomplete="off"></div>
+                <div class="col-6"><input name="proxy_password" type="password" class="form-control form-control-sm" placeholder="{{ 'пароль (пусто — оставить)' if px.has_password else 'пароль' }}" autocomplete="new-password"></div>
+              </div>
+              <div class="small text-muted mb-1">или одной строкой (любой формат: <code>host:port:логин:пароль</code>, <code>логин:пароль@host:port</code>, <code>socks5://…</code>):</div>
+              <input name="proxy" class="form-control form-control-sm mb-1" placeholder="вставьте строку прокси" autocomplete="off">
+              <button class="btn btn-sm btn-outline-secondary w-100">Сохранить прокси</button>
+            </form>
+            {% if a.proxy %}
+            <form method="post" action="/accounts/{{ a.id }}/proxy-test" class="mt-1">
+              <button class="btn btn-sm btn-outline-info w-100">Проверить прокси</button>
+            </form>
+            {% endif %}
+          </details>
+        </td>
+        <td>
+          {% if a.session_path %}<span class="badge bg-success">есть</span>{% else %}<span class="badge bg-danger">нет</span>{% endif %}
+          {% if a.api_id %}
+            {% set n = pool_counts.get(a.api_id, 1) %}
+            {% if n > 1 %}<div class="small text-muted" title="api_id {{ a.api_id }}, в пуле {{ n }} аккаунтов">api_id: пул из {{ n }}</div>
+            {% else %}<div class="small text-muted" title="Собственное приложение аккаунта, api_id {{ a.api_id }}">свой api_id</div>{% endif %}
+          {% else %}
+            <details>
+              <summary class="small text-warning">общий api_id (назначить)</summary>
+              <form method="post" action="/accounts/api/{{ a.id }}/assign" class="d-flex gap-1 mt-1">
+                <select name="api_id" class="form-select form-select-sm">
+                  {% for p in api_pools %}
+                  {% set full = p.count >= pool_limit %}
+                  <option value="{{ p.api_id }}" {{ "disabled" if full else "" }}>
+                    {{ p.api_id }}{{ " — " + p.label if p.label else "" }} ({{ p.count }}/{{ pool_limit }}{{ ", заполнен" if full else "" }})
+                  </option>
+                  {% endfor %}
+                </select>
+                <button class="btn btn-sm btn-outline-secondary" {{ "disabled" if not api_pools else "" }}>OK</button>
+              </form>
+              {% if not api_pools %}<div class="small text-muted mt-1">Нет доступных приложений — загрузите выше или добавьте аккаунт через мастер</div>{% endif %}
+            </details>
+          {% endif %}
+          {% if not a.device_model %}<div class="small text-warning" title="Профиль устройства не задан (Telethon по умолчанию)">нет профиля устройства</div>{% endif %}
+          {% if a.paused_until and a.paused_until > now %}<div><span class="badge bg-warning text-dark" title="Автостоп после FloodWait, серия {{ a.flood_streak }}">пауза до {{ a.paused_until.strftime('%H:%M:%S') }} UTC</span></div>{% endif %}
+        </td>
+        <td>
+          <form method="post" action="/accounts/{{ a.id }}/toggle">
+            <div class="form-check form-switch mb-0" title="{{ 'Автоответчик включён' if a.enabled else 'Автоответчик выключен' }}">
+              <input
+                class="form-check-input"
+                type="checkbox"
+                role="switch"
+                {{ "checked" if a.enabled else "" }}
+                onchange="this.form.submit()"
+              >
+            </div>
+          </form>
+        </td>
+        <td class="text-danger small">{{ a.last_error or "" }}</td>
+        <td>
+          <form method="post" action="/accounts/{{ a.id }}/delete" onsubmit="return confirm('Удалить аккаунт?');">
+            <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash3"></i></button>
+          </form>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="9" class="text-muted">Нет аккаунтов</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endblock %}

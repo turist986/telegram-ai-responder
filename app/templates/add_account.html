@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Добавить аккаунт{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div class="page-eyebrow">// system · accounts · add</div>
+  <h1>Добавить аккаунт менеджера</h1>
+  <p>Вход выполняется только через прокси. Для аккаунта создаётся собственное приложение Telegram (свой api_id/api_hash) и закрепляется стабильный профиль устройства.</p>
+</div>
+
+{% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+
+<div class="card p-3 mb-3">
+  <form method="post" action="/accounts/add/start" autocomplete="off">
+    <div class="row g-2 mb-2">
+      <div class="col-md-3">
+        <label class="form-label small mb-1">Идентификатор (как в Excel)</label>
+        <input class="form-control form-control-sm" name="identifier" value="{{ v.identifier or '' }}" required>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small mb-1">Номер телефона менеджера</label>
+        <input class="form-control form-control-sm" name="phone" placeholder="+12223334455" value="{{ v.phone or '' }}" required>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small mb-1">Имя менеджера</label>
+        <input class="form-control form-control-sm" name="manager_name" value="{{ v.manager_name or '' }}">
+      </div>
+      <div class="col-md-3">
+        <label class="form-label small mb-1">Язык интерфейса (код)</label>
+        <input class="form-control form-control-sm" name="lang_code" value="{{ v.lang_code or 'ru' }}" maxlength="5">
+      </div>
+    </div>
+
+    <h6 class="small text-uppercase text-muted mt-3 mb-2">Приложение Telegram (api_id)</h6>
+    <div class="row g-2 mb-2">
+      <div class="col-12">
+        <select name="pool_api_id" class="form-select form-select-sm">
+          <option value="" {{ "selected" if not v.pool_api_id else "" }}>Новое приложение — свой api_id (по умолчанию, рекомендуется)</option>
+          {% for p in pools %}
+          {% set full = p.count >= pool_limit %}
+          <option value="{{ p.api_id }}" {{ "disabled" if full else "" }} {{ "selected" if v.pool_api_id == p.api_id|string else "" }}>
+            Пул {{ p.api_id }} — {{ p.count }}/{{ pool_limit }} аккаунтов{{ " (заполнен)" if full else "" }} ({{ p.members[:3]|join(', ') }}{{ '…' if p.members|length > 3 else '' }})
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="section-hint mb-3">
+      По умолчанию каждый аккаунт получает собственное приложение — не потому что общий api_id
+      выдаёт связь аккаунтов (Telegram сам использует один api_id для всех пользователей
+      официальных клиентов), а чтобы не зависеть от одного приложения сразу для многих аккаунтов.
+      Выбор существующего пула экономит проход через my.telegram.org: код/CAPTCHA не потребуются,
+      вход в Telegram начнётся сразу. Прокси, сессия и профиль устройства всё равно остаются
+      уникальными для каждого аккаунта. Лимит на пул — {{ pool_limit }} аккаунтов (меняется в
+      «Настройки» → «Защита аккаунтов»).
+    </div>
+
+    <h6 class="small text-uppercase text-muted mt-3 mb-2">Прокси (обязателен)</h6>
+    <div class="row g-2 mb-2">
+      <div class="col-md-2">
+        <select name="proxy_scheme" class="form-select form-select-sm">
+          {% for s in ["socks5", "socks4", "http"] %}<option value="{{ s }}" {{ "selected" if v.proxy_scheme == s else "" }}>{{ s }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-md-3"><input name="proxy_host" class="form-control form-control-sm" placeholder="IP / хост" value="{{ v.proxy_host or '' }}"></div>
+      <div class="col-md-2"><input name="proxy_port" class="form-control form-control-sm" placeholder="порт" value="{{ v.proxy_port or '' }}"></div>
+      <div class="col-md-2"><input name="proxy_user" class="form-control form-control-sm" placeholder="логин" value="{{ v.proxy_user or '' }}" autocomplete="off"></div>
+      <div class="col-md-3"><input name="proxy_password" type="password" class="form-control form-control-sm" placeholder="пароль" autocomplete="new-password"></div>
+    </div>
+    <div class="small text-muted mb-1">или одной строкой (<code>host:port:логин:пароль</code>, <code>логин:пароль@host:port</code>, <code>socks5://…</code>):</div>
+    <input name="proxy" class="form-control form-control-sm mb-3" placeholder="строка прокси" value="{{ v.proxy or '' }}" autocomplete="off">
+
+    <div class="section-hint mb-3">
+      Требования к прокси: <b>статичный (sticky) IP, не ротирующийся</b>; страна — та, где менеджер обычно заходит в Telegram;
+      <b>отдельный прокси на каждый аккаунт</b>. Перед стартом прокси проверяется на доступ к серверам Telegram.
+      Менеджер должен быть рядом: ему придут два кода в Telegram (сначала для my.telegram.org, затем код входа).
+    </div>
+    <button class="btn btn-primary btn-sm">Проверить прокси и продолжить</button>
+    <a class="btn btn-outline-secondary btn-sm" href="/accounts">Назад</a>
+  </form>
+</div>
+{% endblock %}

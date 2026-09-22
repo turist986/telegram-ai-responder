@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Логи{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div class="page-eyebrow">// system · logs</div>
+  <h1>Логи диалогов</h1>
+  <p>Последние 200 сообщений — как от клиентов, так и ответов ИИ, по всем аккаунтам.</p>
+</div>
+<div class="term-window">
+  <div class="term-titlebar">
+    <span class="term-dot red"></span>
+    <span class="term-dot yellow"></span>
+    <span class="term-dot green"></span>
+    <span class="term-title">dialogs.log</span>
+  </div>
+  <div class="term-body pt-2 pb-2">
+  <div class="table-responsive">
+  <table class="table table-sm align-middle mb-0">
+    <thead><tr><th>Время</th><th>Аккаунт</th><th>Чат</th><th>Роль</th><th>Текст</th></tr></thead>
+    <tbody>
+    {% for m in messages %}
+      <tr>
+        <td class="text-nowrap text-muted small">{{ m.created_at }}</td>
+        <td>{{ accounts.get(m.account_id).identifier if accounts.get(m.account_id) else m.account_id }}</td>
+        <td>{{ m.chat_id }}</td>
+        <td>{% if m.role == "user" %}<span class="badge bg-secondary">Клиент</span>{% else %}<span class="badge bg-primary">ИИ</span>{% endif %}</td>
+        <td>{{ m.content }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5" class="text-muted">Пока нет сообщений</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  </div>
+</div>
+{% endblock %}

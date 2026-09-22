@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Обзор{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div class="page-eyebrow">// system · overview</div>
+  <h1>Обзор системы</h1>
+  <p>Общий статус автоответчика и быстрый переход к разделам управления.</p>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="card stat-card p-3">
+      <div class="stat-icon"><i class="bi bi-person-lines-fill"></i></div>
+      <div>
+        <div class="stat-value">{{ total }}</div>
+        <div class="stat-label">Аккаунтов подключено</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card stat-card accent-cyan p-3">
+      <div class="stat-icon"><i class="bi bi-toggle-on"></i></div>
+      <div>
+        <div class="stat-value">{{ active }}</div>
+        <div class="stat-label">Включено тумблером</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card stat-card accent-pink p-3">
+      <div class="stat-icon"><i class="bi bi-power"></i></div>
+      <div>
+        <div class="stat-value">{{ "Вкл" if global_enabled else "Выкл" }}</div>
+        <div class="stat-label">Глобальный статус (Настройки)</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <a href="/accounts" class="card p-3 d-block text-decoration-none h-100 nav-card">
+      <i class="bi bi-person-badge fs-4" style="color: var(--accent);"></i>
+      <h6 class="mt-2 mb-1">Аккаунты</h6>
+      <div class="section-hint">Загрузка .session/TData, синхронизация Excel, тумблеры вкл/выкл по каждому менеджеру.</div>
+    </a>
+  </div>
+  <div class="col-md-4">
+    <a href="/settings" class="card p-3 d-block text-decoration-none h-100 nav-card">
+      <i class="bi bi-sliders fs-4" style="color: var(--accent);"></i>
+      <h6 class="mt-2 mb-1">Настройки</h6>
+      <div class="section-hint">Системный промпт, база знаний, глобальный вкл/выкл, дефолтный дисклеймер.</div>
+    </a>
+  </div>
+  <div class="col-md-4">
+    <a href="/logs" class="card p-3 d-block text-decoration-none h-100 nav-card">
+      <i class="bi bi-chat-left-text fs-4" style="color: var(--accent);"></i>
+      <h6 class="mt-2 mb-1">Логи</h6>
+      <div class="section-hint">Последние 200 сообщений клиентов и ответов ИИ по всем аккаунтам.</div>
+    </a>
+  </div>
+</div>
+
+<div class="card p-3">
+  <h6 class="mb-3">Аккаунты</h6>
+  <div class="table-responsive">
+  <table class="table align-middle mb-0">
+    <thead><tr><th>Идентификатор</th><th>Менеджер</th><th>Статус (Excel)</th><th>Автоответчик</th><th>Авторизован</th></tr></thead>
+    <tbody>
+    {% for a in accounts %}
+      <tr>
+        <td>{{ a.identifier }}</td>
+        <td>{{ a.manager_name or "—" }}</td>
+        <td>{{ a.status_note or "—" }}</td>
+        <td><span class="status-dot {{ 'on' if a.enabled else 'off' }}"></span>{{ "включен" if a.enabled else "выключен" }}</td>
+        <td>{% if a.is_authorized %}<span class="badge bg-success">да</span>{% else %}<span class="badge bg-warning text-dark">нет</span>{% endif %}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5" class="text-muted">Аккаунтов пока нет — добавьте на странице «Аккаунты»</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,11 @@
+# Опциональная зависимость — только для загрузки TData (папка Telegram
+# Desktop) через панель, конвертирует её в .session. Не входит в основной
+# requirements.txt, потому что тянет tgcrypto — а тот собирается из
+# исходников и требует установленный компилятор C++ (на Windows — "Microsoft
+# C++ Build Tools", на Linux — build-essential). Если он не нужен (загружаете
+# только готовые .session файлы через scripts/create_session.py) — просто
+# не устанавливайте этот файл.
+#
+# pip install -r requirements-tdata.txt
+
+opentele==1.15.1
