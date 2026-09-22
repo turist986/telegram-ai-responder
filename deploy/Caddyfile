@@ -1,0 +1,31 @@
+# deploy/Caddyfile — реверс-прокси + автоматический HTTPS (Let's Encrypt) для
+# AI Auto-Responder. Caddy сам получает и продлевает сертификат — вручную
+# ничего настраивать не нужно, в отличие от nginx+certbot (см. deploy/nginx.conf,
+# вариант для Linux). Подходит и для Linux, и для Windows — сам Caddy кроссплатформенный.
+#
+# Перед использованием замените:
+#   your-domain.example  -> ваш домен (должен указывать A-записью на этот сервер)
+#   C:\ai-responder       -> путь, куда склонирован проект
+#
+# Запуск вручную:  caddy run --config deploy\Caddyfile --adapter caddyfile
+# Как фоновая задача (Windows, автозапуск, перезапуск при сбое):
+#   см. deploy\windows\install-services.ps1
+
+your-domain.example {
+	encode gzip
+
+	# Статика отдаётся напрямую Caddy — быстрее и не грузит Python-процесс.
+	handle_path /static/* {
+		root * C:\ai-responder\app\static
+		file_server
+	}
+
+	# Загрузка .session / TData.zip / managers.xlsx через панель — лимит побольше дефолтного.
+	request_body {
+		max_size 20MB
+	}
+
+	reverse_proxy 127.0.0.1:8000 {
+		header_up X-Real-IP {remote_host}
+	}
+}

@@ -6,6 +6,9 @@
 компании и настраиваемого промпта, подписывая каждый ответ дисклеймером об
 ИИ-происхождении.
 
+Веб-панель адаптивна — открывается и с телефона (боковое меню на узких
+экранах сворачивается в гамбургер ☰).
+
 ## Архитектура
 
 ```
@@ -80,9 +83,12 @@ data/
   managers.xlsx            — таблица менеджеров (загружается из панели)
   sessions/                — .session файлы (загружаются из панели)
 deploy/
-  nginx.conf
+  nginx.conf                        — Linux + Nginx + certbot
   systemd/ai-responder-web.service
   systemd/ai-responder-worker.service
+  Caddyfile                         — Linux/Windows + Caddy (авто-HTTPS)
+  windows/install-services.ps1      — регистрация фоновых задач Windows (без Linux-эквивалента systemd)
+  windows/run-web.bat, run-worker.bat, run-caddy.bat
 ```
 
 ## Логика дисклеймера
@@ -343,6 +349,57 @@ live-обновление логов через WebSocket, менять Nginx н
 Для Traefik: эквивалент — роутер на `Host(\`your-domain.example\`)` с
 `tls.certresolver` на ваш ACME-резолвер и `loadbalancer.server.port=8000`,
 проброс на тот же 127.0.0.1:8000 (или сервис в докер-сети).
+
+## Деплой на VPS под Windows (Caddy)
+
+Альтернатива разделу выше — для тех, у кого сервер на Windows, а не Linux.
+Caddy выбран вместо Nginx намеренно: он сам получает и продлевает
+HTTPS-сертификат (Let's Encrypt) без `certbot` и ручной возни с cron —
+достаточно указать домен в `Caddyfile`. `gunicorn` (из systemd-юнита выше) на
+Windows не работает (полагается на `fork()`), поэтому здесь везде — обычный
+`uvicorn`, что и так соответствует требованию «один воркер веб-процесса» из-за
+блокировки сессий Telethon.
+
+1. Установите Python 3.11+ и склонируйте проект, например в `C:\ai-responder`:
+```bash
+git clone https://github.com/<ваш-репозиторий>/telegram-ai-responder.git C:\ai-responder
+cd C:\ai-responder
+python -m venv venv
+venv\Scripts\pip install -r requirements.txt
+copy .env.example .env
+REM заполните .env — см. раздел "Установка" выше
+```
+
+2. Установите Caddy (открыть новое окно PowerShell после установки, чтобы обновился PATH):
+```bash
+winget install CaddyServer.Caddy
+```
+
+3. Отредактируйте `deploy\Caddyfile` — впишите свой домен вместо
+   `your-domain.example` и реальный путь к проекту вместо `C:\ai-responder`
+   (домен должен указывать A-записью на этот сервер).
+
+4. Зарегистрируйте веб-панель, воркера и Caddy как фоновые задачи Windows
+   (автозапуск при старте системы, автоперезапуск при сбое) — **от имени
+   администратора**:
+```bash
+cd C:\ai-responder
+.\deploy\windows\install-services.ps1
+```
+   Скрипт использует только штатный Планировщик заданий Windows — никаких
+   сторонних инструментов (NSSM и т.п.) ставить не нужно. Он же один раз
+   открывает порты 80/443 в брандмауэре Windows.
+
+5. Проверка:
+```bash
+Get-ScheduledTask -TaskName AIResponderWeb,AIResponderWorker,AIResponderCaddy | Get-ScheduledTaskInfo
+```
+   Логи — `data\service-web.log`, `data\service-worker.log`,
+   `data\service-caddy.log`. Панель — на `https://ваш-домен` (сертификат
+   Caddy выпустит сам при первом запросе, обычно занимает несколько секунд).
+
+   Остановить всё: `Stop-ScheduledTask -TaskName AIResponderWeb,AIResponderWorker,AIResponderCaddy`.
+   Удалить всё: `Unregister-ScheduledTask -TaskName AIResponderWeb,AIResponderWorker,AIResponderCaddy -Confirm:$false`.
 
 ## Важные оговорки
 

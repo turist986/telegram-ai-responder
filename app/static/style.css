@@ -344,6 +344,23 @@ code { color: var(--accent3); background: var(--panel-bg-alt); padding: .1em .35
   color: #a9e2fb;
 }
 
+/* ---- Mobile nav toggle (скрыт на десктопе, показывается только в media-запросе ниже) ---- */
+.sidebar-toggle {
+  display: none;
+  margin-left: auto;
+  align-items: center;
+  justify-content: center;
+  width: 2.3rem;
+  height: 2.3rem;
+  flex-shrink: 0;
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  border-radius: .4rem;
+  color: var(--text);
+  font-size: 1.15rem;
+}
+.sidebar-toggle:hover, .sidebar-toggle:focus-visible { border-color: var(--accent); color: var(--accent); }
+
 /* ---- Auth screen ---- */
 .auth-shell {
   min-height: 100vh;
@@ -358,21 +375,26 @@ code { color: var(--accent3); background: var(--panel-bg-alt); padding: .1em .35
 .auth-card { width: 100%; max-width: 360px; }
 .auth-card .term-body { padding: 1.75rem 1.5rem; }
 
-/* ---- Responsive ---- */
+/* ---- Responsive ----
+   На узких экранах пункты меню (Обзор/Аккаунты/Настройки/Логи/Выход) не помещаются
+   в одну строку — вместо горизонтального скролла без подсказки (было раньше и
+   реально пряталось за край экрана) показываем гамбургер и раскрывающийся список. */
 @media (max-width: 860px) {
   .app-shell { flex-direction: column; }
   .sidebar {
     width: 100%;
-    flex-direction: row;
-    align-items: center;
-    overflow-x: auto;
     border-right: none;
     border-bottom: 1px solid var(--panel-border);
   }
-  .sidebar-brand { border-bottom: none; padding: .9rem 1rem; white-space: nowrap; }
-  .sidebar-nav { flex-direction: row; padding: .5rem; }
-  .sidebar-nav a { white-space: nowrap; }
-  .sidebar-logout { border-top: none; padding: .9rem 1rem; white-space: nowrap; }
-  .sidebar-status { display: none; }
+  .sidebar-brand { border-bottom: none; padding: .8rem 1rem; }
+  .sidebar-toggle { display: flex; }
+
+  .sidebar-nav, .sidebar-logout, .sidebar-status { display: none; }
+  .sidebar.nav-open .sidebar-nav,
+  .sidebar.nav-open .sidebar-logout,
+  .sidebar.nav-open .sidebar-status { display: flex; }
+
+  .sidebar-nav a { padding: .75rem .85rem; font-size: .85rem; } /* крупнее — удобнее попадать пальцем */
+  .sidebar-logout { border-top: 1px solid var(--panel-border); }
   .main-inner { padding: 1.25rem; }
 }

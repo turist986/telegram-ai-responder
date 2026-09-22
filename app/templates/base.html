@@ -10,12 +10,16 @@
 </head>
 <body>
 <div class="app-shell">
-  <aside class="sidebar">
+  <aside class="sidebar" id="sidebar">
     <div class="sidebar-brand">
       <i class="bi bi-robot"></i>
       <span>AI_АВТООТВЕТЧИК</span>
+      <button type="button" class="sidebar-toggle" id="sidebarToggle"
+              aria-label="Открыть меню" aria-expanded="false" aria-controls="sidebarNav">
+        <i class="bi bi-list"></i>
+      </button>
     </div>
-    <nav class="sidebar-nav">
+    <nav class="sidebar-nav" id="sidebarNav">
       <a href="/" class="{{ 'active' if request.url.path == '/' else '' }}">
         <i class="bi bi-speedometer2"></i> Обзор
       </a>
@@ -38,5 +42,18 @@
     </div>
   </main>
 </div>
+<script>
+// Мобильное меню: чистый JS без зависимостей (в проекте нет bootstrap.bundle.js,
+// только bootstrap.min.css — JS-компоненты Bootstrap здесь не подключены).
+(function () {
+  var btn = document.getElementById('sidebarToggle');
+  var sidebar = document.getElementById('sidebar');
+  if (!btn || !sidebar) return;
+  btn.addEventListener('click', function () {
+    var open = sidebar.classList.toggle('nav-open');
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+})();
+</script>
 </body>
 </html>
