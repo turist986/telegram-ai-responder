@@ -27,17 +27,44 @@ def _find_real_tdata_dir(extracted_dir: Path) -> Path:
     return extracted_dir  # не нашли — вернём как есть, пусть TDesktop сам сообщит об ошибке
 
 
-def tdata_to_session(tdata_dir: Path, out_session_path: Path) -> None:
+def tdata_to_session(tdata_dir: Path, out_session_path: Path, proxy: tuple | None = None) -> None:
     """Конвертирует папку TData (Telegram Desktop) в .session файл Telethon.
+
+    proxy — кортеж PySocks (см. proxy.parse_proxy). CreateNewSession делает настоящие
+    сетевые подключения к Telegram (один раз старым ключом из TData и один раз новым),
+    поэтому БЕЗ прокси они пойдут с реального IP машины, на которой запущена панель —
+    у человека за личным VPN это его собственный «реальный» адрес, а именно его и
+    видит потом Telegram. При REQUIRE_PROXY=true (по умолчанию) вызов без прокси
+    отклоняется.
+
+    Использует opentele CreateNewSession, а НЕ UseCurrentSession: результат — новый,
+    отдельный сеанс (свой auth_key), который появляется как собственная запись в
+    списке активных сеансов Telegram, не деля сеанс с самим Telegram Desktop.
+    UseCurrentSession в буквальном смысле копирует auth_key живого Desktop-клиента —
+    тогда любая активность самого Desktop (в т.ч. с другого IP/VPN, если владелец
+    зашёл туда напрямую) отражается на ТОЙ ЖЕ записи сеанса, которую использует наш
+    воркер, и наоборот: воркер через прокси и Desktop через VPN выглядят как одно и
+    то же место, которое постоянно телепортируется — именно так Telegram и
+    обнаруживает подозрительную активность. CreateNewSession — это настоящий (хотя и
+    автоматический) вход поверх данных из TData, создающий отдельную запись
+    устройства, никак не связанную с уже открытыми сеансами Desktop.
 
     Требует опциональный пакет `opentele` (pip install -r requirements-tdata.txt).
     API этой библиотеки может отличаться между версиями — при ошибках
     сверьтесь с её документацией (https://github.com/thedemons/opentele).
     """
+    from ..config import settings
+
+    if proxy is None and settings.require_proxy:
+        raise RuntimeError(
+            "Для импорта TData нужен прокси аккаунта: подключение к Telegram при конвертации иначе "
+            "пошло бы с реального IP этой машины. Задайте прокси (или отключите REQUIRE_PROXY — не рекомендуется)."
+        )
+
     patch_opentele_for_new_python()  # см. _opentele_compat.py — совместимость с Python 3.13+
 
     try:
-        from opentele.api import UseCurrentSession
+        from opentele.api import CreateNewSession
         from opentele.td import TDesktop
     except ImportError as exc:
         raise RuntimeError(
@@ -57,10 +84,24 @@ def tdata_to_session(tdata_dir: Path, out_session_path: Path) -> None:
                 "Telegram Desktop (нет файла ключа) или профиль защищён локальным "
                 "паролем, который здесь не передан."
             )
-        client = await tdesk.ToTelethon(session=str(out_session_path), flag=UseCurrentSession)
+        # CreateNewSession делает реальный сетевой запрос к Telegram (QR-логин поверх
+        # старых данных) — в отличие от UseCurrentSession, где сеанс просто копируется
+        # локально. Поэтому конвертация теперь занимает пару секунд, а не мгновенна.
+        kwargs = {"proxy": proxy} if proxy else {}
+        client = await tdesk.ToTelethon(session=str(out_session_path), flag=CreateNewSession, **kwargs)
         await client.disconnect()
 
     # Вызывается из async-обработчика FastAPI, где цикл событий уже запущен, а
     # asyncio.run() в нём запрещён — поэтому гоним конвертацию в отдельном потоке.
     with ThreadPoolExecutor(max_workers=1) as pool:
-        pool.submit(lambda: asyncio.run(_convert())).result()
+        try:
+            pool.submit(lambda: asyncio.run(_convert())).result()
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            # opentele/Telethon внутри могут бросить что угодно (PyQt5-, Qt- и
+            # protobuf-специфичные исключения, не только RuntimeError) — вызывающий
+            # код (accounts.py) ловит только RuntimeError и показывает текст
+            # пользователю; без этой обёртки любая другая ошибка превращалась бы в
+            # неинформативный HTTP 500 без единого слова о причине.
+            raise RuntimeError(f"Не удалось сконвертировать TData ({type(exc).__name__}): {exc}") from exc

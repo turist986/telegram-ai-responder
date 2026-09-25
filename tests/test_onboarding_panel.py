@@ -212,8 +212,13 @@ class PanelTests(unittest.TestCase):
         bad = self.client.post("/settings/protection", data={"checking_preset": "custom", "poll_interval_seconds": "1"})
         self.assertIn("допустимо", unquote_plus(bad.headers["location"]))
 
-    def test_legacy_imports_blocked_and_proxy_cannot_be_removed(self):
-        r = self.client.post("/accounts/upload-session", data={"identifier": "z"}, files={"session_file": ("z.session", b"x")})
+    def test_legacy_imports_blocked_when_switched_off_and_proxy_cannot_be_removed(self):
+        # импорт включён по умолчанию (TData идёт через CreateNewSession + прокси), но его
+        # можно выключить ALLOW_LEGACY_SESSION_IMPORT=false — тогда блокируется целиком
+        from unittest.mock import patch
+
+        with patch.object(settings, "allow_legacy_session_import", False):
+            r = self.client.post("/accounts/upload-session", data={"identifier": "z"}, files={"session_file": ("z.session", b"x")})
         self.assertEqual(r.status_code, 303)
         self.assertIn("отключён", unquote_plus(r.headers["location"]))
         with SessionLocal() as db:

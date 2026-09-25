@@ -57,9 +57,13 @@ class Settings(BaseSettings):
     max_direct_accounts: int = 10
     # Аккаунт без прокси НЕ запускается вообще (ни одного соединения с IP сервера).
     require_proxy: bool = True
-    # Импорт готовых .session / TData отключён: такие сессии рождены с чужим api_id и IP,
-    # а TData через UseCurrentSession делит ключ с Desktop (риск AUTH_KEY_DUPLICATED).
-    allow_legacy_session_import: bool = False
+    # Импорт готовых .session / TData: TData конвертируется через CreateNewSession
+    # (создаёт отдельный сеанс со своим ключом, не делит его с Telegram Desktop — см.
+    # session_utils.py), поэтому включён по умолчанию. Готовые .session-файлы всё
+    # равно рождены с чужим api_id/IP — учитывайте это отдельно. Выключите, если
+    # хотите разрешить добавление аккаунтов только через мастер (свой api_id, свой
+    # прокси с самого первого входа).
+    allow_legacy_session_import: bool = True
     # Мастер добавления аккаунта: сколько живёт незавершённая попытка и видимость браузера.
     onboarding_ttl_seconds: int = 900
     playwright_headless: bool = True
