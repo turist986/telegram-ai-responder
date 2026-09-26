@@ -98,6 +98,28 @@ def proxy_identity(proxy_str: str | None) -> tuple:
     )
 
 
+def looks_like_proxy_string(host: str, port: str = "", user: str = "", password: str = "") -> bool:
+    """В поле «хост» вставили целую строку прокси (логин:пароль@host:port, host:port:логин:пароль,
+    socks5://…), а порт/логин/пароль отдельно не заполнены — такое поле надо разбирать как строку."""
+    host = (host or "").strip()
+    return bool(host) and not (port or "").strip() and not (user or "").strip() and not password \
+        and any(c in host for c in "@:")
+
+
+def proxy_from_form(scheme: str, host: str, port: str, user: str, password: str, raw: str) -> str | None:
+    """Прокси из формы: отдельные поля ИЛИ строка (в отдельном поле либо вставленная в «хост»).
+    Схема из выпадающего списка — по умолчанию для строки без схемы (у мобильных прокси
+    часто http, а не socks5). Бросает ProxyConfigError."""
+    scheme = (scheme or "socks5").strip().lower()
+    if (raw or "").strip():
+        return normalize_proxy(raw, default_scheme=scheme)    # явно вставленная строка главнее полей
+    if looks_like_proxy_string(host, port, user, password):
+        return normalize_proxy(host, default_scheme=scheme)
+    if (host or "").strip():
+        return build_proxy_url(scheme, host, port, (user or "").strip(), password)
+    return normalize_proxy(raw, default_scheme=scheme)
+
+
 def mask_proxy(proxy_str: str | None) -> str:
     """scheme://host:port (+ пометка, что есть логин) — без пароля, для показа в панели."""
     if not proxy_str:

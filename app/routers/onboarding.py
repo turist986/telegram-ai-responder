@@ -59,16 +59,13 @@ async def add_start(
     user: str = Depends(require_login),
     db: Session = Depends(get_db),
 ):
-    from ..services.proxy import ProxyConfigError, build_proxy_url
+    from ..services.proxy import ProxyConfigError, proxy_from_form
 
     values = {"identifier": identifier, "phone": phone, "manager_name": manager_name, "lang_code": lang_code,
               "proxy_scheme": proxy_scheme, "proxy_host": proxy_host, "proxy_port": proxy_port,
               "proxy_user": proxy_user, "proxy": proxy, "pool_api_id": pool_api_id}
     try:
-        if proxy_host.strip():
-            raw_proxy = build_proxy_url(proxy_scheme, proxy_host, proxy_port, proxy_user.strip(), proxy_password)
-        else:
-            raw_proxy = proxy
+        raw_proxy = proxy_from_form(proxy_scheme, proxy_host, proxy_port, proxy_user, proxy_password, proxy) or ""
         pool_id = None
         if pool_api_id.strip():
             if not pool_api_id.strip().isdigit():

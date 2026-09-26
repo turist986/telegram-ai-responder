@@ -22,6 +22,7 @@ from ..services.excel_loader import sync_accounts_from_excel
 from ..services.proxy import (
     ProxyConfigError,
     build_proxy_url,
+    looks_like_proxy_string,
     mask_proxy,
     normalize_proxy,
     parse_proxy,
@@ -156,6 +157,10 @@ async def set_proxy(
         return RedirectResponse("/accounts", status_code=303)
 
     try:
+        if proxy.strip():
+            proxy_host = ""     # явно вставленная строка главнее полей (они предзаполнены старым прокси)
+        elif looks_like_proxy_string(proxy_host, proxy_port, proxy_user, proxy_password):
+            proxy, proxy_host = proxy_host, ""      # строку вставили в поле «хост» — разбираем как строку
         if proxy_host.strip():
             password = proxy_password
             if not password and account.proxy:
@@ -166,11 +171,11 @@ async def set_proxy(
                     password = unquote(old.password)
             normalized = build_proxy_url(proxy_scheme, proxy_host, proxy_port, proxy_user.strip(), password)
         else:
-            normalized = normalize_proxy(proxy)
+            normalized = normalize_proxy(proxy, default_scheme=(proxy_scheme or "socks5").strip().lower())
         if normalized:
             parse_proxy(normalized)
     except ProxyConfigError as exc:
-        return RedirectResponse(f"/accounts?msg={exc}", status_code=303)
+        return RedirectResponse(f"/accounts?msg={quote(str(exc))}", status_code=303)
 
     if not normalized and settings.require_proxy:
         return RedirectResponse("/accounts?msg=Прокси+обязателен+—+удалить+его+нельзя,+только+заменить", status_code=303)
