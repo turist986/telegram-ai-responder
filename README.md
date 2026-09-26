@@ -92,6 +92,9 @@ deploy/
   Caddyfile                         — Linux/Windows + Caddy (авто-HTTPS)
   windows/install-services.ps1      — регистрация фоновых задач Windows (без Linux-эквивалента systemd)
   windows/run-web.bat, run-worker.bat, run-caddy.bat
+  windows/update.ps1                — обновление сервера одной командой (запускается через update.bat)
+  update.sh                         — то же для Linux
+update.bat               — обновление Windows-сервера: git pull + зависимости + перезапуск
 ```
 
 ## Логика дисклеймера
@@ -326,15 +329,33 @@ opentele без `tgcrypto` (`--no-deps`), PyQt5 отдельно, а вмест�
 чистый Python-шим (`app/services/_opentele_compat.py`). Если TData не нужен — скрипт можно не
 запускать; в панели, если пакета нет, импорт покажет подсказку с этой командой.
 
-**Обновление после `git pull`** (сайт/воркер как фоновые задачи на сервере):
+**Обновление сервера одной командой.** В папке проекта (на Windows VPS — в PowerShell или cmd
+«от имени администратора», иначе задачи Планировщика не перезапустить):
+
 ```bash
-venv\Scripts\python.exe -m pip install -r requirements.txt
-venv\Scripts\python.exe scripts\install_tdata_deps.py
-Stop-ScheduledTask -TaskName AIResponderWeb,AIResponderWorker
-Start-ScheduledTask -TaskName AIResponderWeb,AIResponderWorker
+.\update.bat
 ```
-(`start_local.bat` сверяет зависимости при каждом запуске сам.) Код Python подхватывается только
-после перезапуска; шаблоны и статика — сразу.
+(в cmd — просто `update.bat`; на Linux — `bash deploy/update.sh`). Скрипт делает всё сам:
+`git pull` → доустанавливает зависимости (`requirements.txt`, при необходимости пакеты для TData) →
+перезапускает сайт и воркера (задачи `AIResponderWeb`/`AIResponderWorker`, а если изменился
+`deploy\Caddyfile` — и `AIResponderCaddy`) → ждёт, пока панель ответит, и пишет «Готово» (или
+показывает конец лога). Если обновлять нечего — так и скажет и ничего не перезапустит
+(`update.bat -Force` — переустановить и перезапустить всё равно; `-NoRestart` — только код и
+зависимости).
+
+- Свои правки отслеживаемых файлов (например, домен в `deploy\Caddyfile`) не мешают: скрипт
+  использует `git pull --autostash`. `.env`, `data\` (база, сессии) и `venv` вне git и не
+  затрагиваются.
+- Если сайт запущен через `start_local.bat`, а не как задачи, скрипт обновит код и зависимости и
+  напомнит перезапустить окна вручную.
+- **Один раз** после появления этого скрипта на сервере: `git pull --autostash`, дальше —
+  только `.\update.bat`.
+
+Вручную то же самое: `git pull`, `venv\Scripts\python.exe -m pip install -r requirements.txt`,
+`venv\Scripts\python.exe scripts\install_tdata_deps.py`,
+`Stop-ScheduledTask` и `Start-ScheduledTask -TaskName AIResponderWeb,AIResponderWorker`.
+Код Python подхватывается только после перезапуска; шаблоны и статика — сразу.
+(`start_local.bat` сверяет зависимости при каждом запуске сам.)
 
 **Лимит загрузки:** в `deploy/Caddyfile` и `deploy/nginx.conf` стоит 1 ГБ (архивы профилей
 Desktop бывают большими). Если панель стоит за другим прокси/CDN (например, Cloudflare на
