@@ -111,7 +111,7 @@ class OnboardingFlowTests(unittest.IsolatedAsyncioTestCase):
             db.add(Account(identifier="other", proxy="socks5://a:b@10.1.1.1:1080"))
             db.commit()
             with self.assertRaises(ob.OnboardingError) as cm:
-                await ob.begin(db, "x", "+12223334455", "socks5://10.1.1.1:1080", "", "ru")
+                await ob.begin(db, "x", "+12223334455", "socks5://a:b@10.1.1.1:1080", "", "ru")
             self.assertIn("other", str(cm.exception))
 
     async def test_dead_proxy_is_rejected_before_any_network_step(self):

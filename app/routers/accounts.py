@@ -25,6 +25,7 @@ from ..services.proxy import (
     mask_proxy,
     normalize_proxy,
     parse_proxy,
+    proxy_identity,
     split_proxy,
     test_proxy,
 )
@@ -386,8 +387,7 @@ async def upload_all(
                                 f"/accounts?msg={quote(f'У аккаунта {ident} не задан прокси — заполните столбец «Прокси» в Excel и загрузите таблицу снова. Ничего не импортировано.')}",
                                 status_code=303,
                             )
-                        p = urlparse(acc.proxy)
-                        key = (p.hostname, p.port)
+                        key = proxy_identity(acc.proxy)
                         if key in seen:
                             return RedirectResponse(
                                 f"/accounts?msg={quote(f'Аккаунты {seen[key]} и {ident} используют один прокси — нужен отдельный на каждый. Ничего не импортировано.')}",

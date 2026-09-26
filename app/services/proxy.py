@@ -78,6 +78,26 @@ def normalize_proxy(raw: str | None, default_scheme: str = "socks5") -> str | No
     )
 
 
+def proxy_identity(proxy_str: str | None) -> tuple:
+    """Ключ «это один и тот же прокси»: хост, порт, логин и пароль (схема не важна).
+
+    У мобильных и резидентных пулов хост (а часто и порт) один на всех, а разные
+    прокси различаются логином/паролем (сессия/страна/IP привязаны к логину) — поэтому
+    сравнивать только host:port нельзя, аккаунты с разными логинами были бы ложно
+    признаны «одним прокси»."""
+    try:
+        text = normalize_proxy(proxy_str) or ""
+    except ProxyConfigError:
+        text = proxy_str or ""
+    parsed = urlparse(text)
+    return (
+        (parsed.hostname or "").lower(),
+        parsed.port,
+        unquote(parsed.username) if parsed.username else "",
+        unquote(parsed.password) if parsed.password else "",
+    )
+
+
 def mask_proxy(proxy_str: str | None) -> str:
     """scheme://host:port (+ пометка, что есть логин) — без пароля, для показа в панели."""
     if not proxy_str:

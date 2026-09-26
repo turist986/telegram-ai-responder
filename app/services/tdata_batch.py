@@ -23,14 +23,13 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
-from urllib.parse import urlparse
 
 from ..config import settings
 from ..database import SessionLocal
 from ..models import Account
 from .archive_utils import ArchiveError, extract_tdata_archive
 from .onboarding import proxy_in_use
-from .proxy import ProxyConfigError, mask_proxy, normalize_proxy, parse_proxy
+from .proxy import ProxyConfigError, mask_proxy, normalize_proxy, parse_proxy, proxy_identity
 from .session_files import discard_session_file, finalize_tdata_account, fresh_session_path
 from .session_utils import find_tdata_dirs, tdata_to_session
 
@@ -167,8 +166,7 @@ def prepare_batch(
     for ident, proxy in zip(idents, proxies):
         if not proxy:
             continue
-        p = urlparse(proxy)
-        key = (p.hostname, p.port)
+        key = proxy_identity(proxy)
         if key in seen:
             raise TDataBatchError(f"Аккаунты {seen[key]} и {ident} используют один прокси — нужен отдельный на каждый")
         seen[key] = ident

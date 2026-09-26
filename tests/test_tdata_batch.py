@@ -114,14 +114,20 @@ class PrepareTests(Base):
     def test_duplicate_or_foreign_proxy_rejected(self):
         arch = [self.archive("a.zip", "1/tdata/key_datas", "2/tdata/key_datas")]
         with self.assertRaises(tb.TDataBatchError) as cm:
-            self.prepare(arch, proxies_text="10.1.1.1:1080:u:p\n10.1.1.1:1080:x:y")
+            self.prepare(arch, proxies_text="10.1.1.1:1080:u:p\nu:p@10.1.1.1:1080")     # одна и та же строка в двух форматах
         self.assertIn("один прокси", str(cm.exception))
         with SessionLocal() as db:
-            db.add(Account(identifier="other", proxy="socks5://10.2.2.2:1080"))
+            db.add(Account(identifier="other", proxy="socks5://u:p@10.2.2.2:1080"))
             db.commit()
         with self.assertRaises(tb.TDataBatchError) as cm:
             self.prepare(arch, proxies_text=f"{P[1]}\n{P[2]}")
         self.assertIn("other", str(cm.exception))
+
+    def test_shared_pool_host_with_different_logins_is_allowed(self):
+        arch = [self.archive("a.zip", "1/tdata/key_datas", "2/tdata/key_datas")]
+        job = self.prepare(arch, proxies_text="pool.example:10000:userA:pwA\nuserB:pwB@pool.example:10000")
+        self.assertEqual(len(job.items), 2)
+        self.assertNotEqual(job.items[0].proxy, job.items[1].proxy)
 
     def test_existing_session_is_skipped_unless_replace(self):
         with SessionLocal() as db:

@@ -18,7 +18,6 @@ import secrets
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 from telethon import TelegramClient
@@ -36,7 +35,7 @@ from ..config import settings
 from ..models import Account, ApiCredential
 from . import device_profile
 from .api_app_creator import ApiAppCreator, CreatorError
-from .proxy import ProxyConfigError, choose_ip_family, normalize_proxy, parse_proxy, test_proxy
+from .proxy import ProxyConfigError, choose_ip_family, normalize_proxy, parse_proxy, proxy_identity, test_proxy
 from .session_lock import SessionInUseError, SessionLock
 from .settings_store import get_protection
 
@@ -85,13 +84,14 @@ def normalize_phone(raw: str) -> str:
 
 
 def proxy_in_use(db: Session, proxy: str, exclude_identifier: str | None = None) -> str | None:
-    """Идентификатор аккаунта, у которого уже стоит тот же host:port прокси, иначе None."""
-    target = urlparse(proxy)
+    """Идентификатор аккаунта, у которого уже стоит тот же прокси, иначе None.
+    Сравнивается вся строка (хост, порт, логин, пароль), а не только host:port —
+    у пулов мобильных прокси хост общий, а различается логин."""
+    target = proxy_identity(proxy)
     for acc in db.query(Account).all():
         if not acc.proxy or acc.identifier == exclude_identifier:
             continue
-        other = urlparse(acc.proxy)
-        if (other.hostname, other.port) == (target.hostname, target.port):
+        if proxy_identity(acc.proxy) == target:
             return acc.identifier
     return None
 
