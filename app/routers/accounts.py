@@ -30,11 +30,21 @@ from ..services.proxy import (
 )
 from ..services import worker_control
 from ..services.onboarding import list_api_pools, proxy_in_use
+from ..services.session_files import (
+    bind_session as _bind_session,
+    fresh_session_path as _fresh_session_path,
+    finalize_tdata_account as _finalize_tdata_account,
+)
+from ..services.session_utils import find_tdata_dirs as _find_tdata_dirs
 from ..services.session_utils import tdata_to_session
 from ..services.settings_store import get_protection
 
 LEGACY_IMPORT_OFF_MSG = quote(
-    "Импорт .session/TData отключён в настройках (ALLOW_LEGACY_SESSION_IMPORT=false в .env). "
+    "Импорт готовых .session-файлов отключён в настройках (ALLOW_LEGACY_SESSION_IMPORT=false в .env). "
+    "Включите его или используйте «Добавить аккаунт» (вход по номеру через прокси, собственный api_id)."
+)
+TDATA_IMPORT_OFF_MSG = quote(
+    "Импорт TData отключён в настройках (ALLOW_TDATA_IMPORT=false в .env). "
     "Включите его или используйте «Добавить аккаунт» (вход по номеру через прокси, собственный api_id)."
 )
 from ..templating import templates
@@ -59,55 +69,8 @@ async def _convert_tdata(proxy_str: str | None, tdir: Path, dest: Path) -> None:
     await run_in_threadpool(tdata_to_session, tdir, dest, proxy_tuple)
 
 
-def _finalize_tdata_account(db: Session, identifier: str, dest: Path, proxy_str: str) -> Account:
-    """Создаёт/обновляет аккаунт после успешной конвертации. Аккаунт создаётся ВЫКЛЮЧЕННЫМ:
-    только что созданный сеанс не должен сразу начинать отвечать клиентам — включите
-    автоответчик вручную через 30–60 минут (как и после добавления через мастер)."""
-    account = db.query(Account).filter_by(identifier=identifier).one_or_none()
-    if account is None:
-        account = Account(identifier=identifier)
-        db.add(account)
-    _bind_session(account, dest)
-    account.proxy = proxy_str
-    account.is_authorized = True  # вход только что выполнен (CreateNewSession)
-    account.enabled = False
-    account.last_error = None
-    db.commit()
-    return account
-
-
-def _fresh_session_path(identifier: str) -> Path:
-    """Каждая загрузка пишет в НОВЫЙ файл: перезапись файла, который прямо сейчас держит
-    подключённый воркер, портит сессию, а воркер не заметит смены (путь тот же)."""
-    settings.sessions_dir.mkdir(parents=True, exist_ok=True)
-    safe = re.sub(r"[^\w.-]", "_", identifier)
-    return settings.sessions_dir / f"{safe}-{dt.datetime.now():%Y%m%d%H%M%S%f}.session"
-
-
-def _discard_session_file(path: str) -> None:
-    for suffix in ("", "-journal", ".lock"):
-        try:
-            Path(path + suffix).unlink(missing_ok=True)
-        except OSError:
-            logger.warning("Не удалось удалить старый файл сессии %s%s (занят) — удалите вручную", path, suffix)
-
-
-def _bind_session(account: Account, dest: Path) -> None:
-    old = account.session_path
-    account.session_path = str(dest)
-    account.is_authorized = False
-    account.last_error = None
-    if old and old != str(dest):
-        _discard_session_file(old)
-
-
 def _natural_key(value: str):
     return (0, int(value), "") if value.isdigit() else (1, 0, value)
-
-
-def _find_tdata_dirs(root: Path) -> list[Path]:
-    dirs = {p.parent for name in ("key_datas", "key_data") for p in root.rglob(name) if p.is_file()}
-    return sorted(dirs, key=lambda p: str(p))
 
 
 @router.get("", response_class=HTMLResponse)
@@ -131,6 +94,7 @@ async def accounts_page(request: Request, user: str = Depends(require_login), db
             "split_proxy": split_proxy,
             "now": dt.datetime.utcnow(),
             "legacy_import": settings.allow_legacy_session_import,
+            "tdata_import": settings.allow_tdata_import,
         },
     )
 
@@ -311,8 +275,8 @@ async def upload_tdata(
 ):
     """Принимает .zip с папкой TData и создаёт из неё НОВЫЙ отдельный сеанс (CreateNewSession),
     не делящий ключ с Telegram Desktop. Всё общение с Telegram идёт через прокси аккаунта."""
-    if not settings.allow_legacy_session_import:
-        return RedirectResponse(f"/accounts?msg={LEGACY_IMPORT_OFF_MSG}", status_code=303)
+    if not settings.allow_tdata_import:
+        return RedirectResponse(f"/accounts?msg={TDATA_IMPORT_OFF_MSG}", status_code=303)
     identifier = identifier.strip()
     if not identifier:
         return RedirectResponse("/accounts?msg=Укажите+идентификатор+аккаунта", status_code=303)
@@ -360,8 +324,13 @@ async def upload_all(
     has_excel = bool(excel_file and excel_file.filename)
     if not has_auth and not has_excel:
         return RedirectResponse("/accounts?msg=Выберите+файл+сессии/TData+и/или+Excel", status_code=303)
-    if has_auth and not settings.allow_legacy_session_import:
-        return RedirectResponse(f"/accounts?msg={LEGACY_IMPORT_OFF_MSG}", status_code=303)
+    if has_auth:
+        # TData (.zip) и готовые .session включаются независимыми флагами
+        is_zip = auth_file.filename.lower().endswith(".zip")
+        if is_zip and not settings.allow_tdata_import:
+            return RedirectResponse(f"/accounts?msg={TDATA_IMPORT_OFF_MSG}", status_code=303)
+        if not is_zip and not settings.allow_legacy_session_import:
+            return RedirectResponse(f"/accounts?msg={LEGACY_IMPORT_OFF_MSG}", status_code=303)
 
     if has_excel:
         settings.managers_excel_path.parent.mkdir(parents=True, exist_ok=True)

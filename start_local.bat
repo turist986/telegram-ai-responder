@@ -27,15 +27,32 @@ if not exist ".env" (
 )
 
 if not exist "venv\Scripts\python.exe" (
-    echo [*] Первый запуск: создаю виртуальное окружение и ставлю зависимости...
+    echo [*] Первый запуск: создаю виртуальное окружение...
     python -m venv venv
     if errorlevel 1 (
         echo [!] Не удалось создать venv. Убедитесь, что Python установлен и есть в PATH.
         pause
         exit /b 1
     )
-    call venv\Scripts\activate.bat
-    pip install -r requirements.txt
+)
+
+REM Зависимости сверяем при КАЖДОМ запуске: после git pull в requirements.txt
+REM могли появиться новые пакеты, а без них сайт падает при старте. Если всё уже
+REM установлено — команда отрабатывает за пару секунд.
+echo [*] Проверяю зависимости...
+venv\Scripts\python.exe -m pip install -q --disable-pip-version-check -r requirements.txt
+if errorlevel 1 (
+    echo [!] Не удалось установить зависимости из requirements.txt — см. сообщения выше.
+    pause
+    exit /b 1
+)
+
+REM Импорт TData: opentele ставится отдельным скриптом (без компилятора C++).
+venv\Scripts\python.exe -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec('opentele') else 1)"
+if errorlevel 1 (
+    echo [*] Ставлю зависимости импорта TData ^(один раз^)...
+    venv\Scripts\python.exe scripts\install_tdata_deps.py
+    if errorlevel 1 echo [!] Импорт TData пока недоступен ^(остальное работает^). Повторить: venv\Scripts\python.exe scripts\install_tdata_deps.py
 )
 
 echo.

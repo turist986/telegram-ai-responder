@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Ход импорта TData{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div class="page-eyebrow">// system · accounts · tdata</div>
+  <h1>Ход импорта TData</h1>
+  <p id="summary">Загружаем состояние…</p>
+</div>
+
+<div class="card p-3 mb-3">
+  <div class="table-responsive">
+    <table class="table align-middle mb-0">
+      <thead><tr><th>Аккаунт</th><th>Источник</th><th>Прокси</th><th>Статус</th><th>Результат</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="5" class="text-muted">…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<div id="done-actions" style="display:none">
+  <a class="btn btn-primary" href="/accounts">К списку аккаунтов</a>
+  <a class="btn btn-outline-secondary" href="/accounts/import-tdata">Импортировать ещё</a>
+</div>
+
+<script>
+(function () {
+  var token = {{ token | tojson }};
+  var LABEL = {queued: ['в очереди', 'bg-secondary'], running: ['входит…', 'bg-primary'], ok: ['готово', 'bg-success'],
+               error: ['ошибка', 'bg-danger'], skipped: ['пропущен', 'bg-warning']};
+  function cell(tr, text, cls) { var td = document.createElement('td'); td.textContent = text; if (cls) td.className = cls; tr.appendChild(td); return td; }
+  function render(d) {
+    if (d.expired) { document.getElementById('summary').textContent = 'Задача больше недоступна (прошло много времени или сервер перезапускали). Проверьте список аккаунтов.'; document.getElementById('done-actions').style.display = 'block'; return true; }
+    var tbody = document.getElementById('rows'); tbody.textContent = '';
+    d.items.forEach(function (it) {
+      var tr = document.createElement('tr');
+      cell(tr, it.identifier); cell(tr, it.source, 'small text-muted'); cell(tr, it.proxy, 'small text-muted');
+      var st = document.createElement('td'), b = document.createElement('span'), l = LABEL[it.status] || [it.status, 'bg-secondary'];
+      b.className = 'badge ' + l[1]; b.textContent = l[0]; st.appendChild(b); tr.appendChild(st);
+      cell(tr, it.message, it.status === 'error' ? 'small text-danger' : 'small');
+      tbody.appendChild(tr);
+    });
+    var c = d.counts;
+    document.getElementById('summary').textContent = d.done
+      ? 'Готово: успешно ' + c.ok + ', ошибок ' + c.error + ', пропущено ' + c.skipped + '. Автоответчик у новых аккаунтов выключен — включите через 30–60 минут.'
+      : 'Идёт импорт: готово ' + c.ok + ', в работе ' + c.running + ', в очереди ' + c.queued + ', ошибок ' + c.error + '. Аккаунты входят по одному с паузами; эту страницу можно закрыть — задача продолжится на сервере.';
+    if (d.done) document.getElementById('done-actions').style.display = 'block';
+    return d.done;
+  }
+  function tick() {
+    fetch('/accounts/import-tdata/' + token + '/status', {cache: 'no-store'})
+      .then(function (r) { return r.json(); })
+      .then(function (d) { if (!render(d)) setTimeout(tick, 2000); })
+      .catch(function () { setTimeout(tick, 4000); });
+  }
+  tick();
+})();
+</script>
+{% endblock %}

@@ -37,6 +37,16 @@
   <a class="btn btn-primary btn-sm" href="/accounts/add"><i class="bi bi-plus-lg"></i> Добавить аккаунт</a>
 </div>
 
+{% if tdata_import %}
+<div class="card p-3 mb-3 d-flex flex-row align-items-center justify-content-between">
+  <div>
+    <strong>Импорт из TData (массово)</strong>
+    <div class="section-hint">Перетащите архивы .zip / .rar с профилями Telegram Desktop — аккаунты добавятся пачкой, каждый отдельным сеансом через свой прокси.</div>
+  </div>
+  <a class="btn btn-primary btn-sm" href="/accounts/import-tdata"><i class="bi bi-cloud-arrow-up"></i> Импорт TData</a>
+</div>
+{% endif %}
+
 <div class="card p-3 mb-4">
   <h6 class="mb-2"><i class="bi bi-key"></i> Приложения (api_id): загрузка и распределение</h6>
   <div class="section-hint mb-2">
@@ -85,10 +95,10 @@
 
 <div class="card p-3 mb-4">
   <i class="bi bi-upload text-primary fs-5"></i>
-  <h6 class="mt-2">Excel-таблица менеджеров{% if legacy_import %} и импорт из TData / .session{% endif %}</h6>
+  <h6 class="mt-2">Excel-таблица менеджеров{% if legacy_import or tdata_import %} и загрузка одного аккаунта{% endif %}</h6>
   <form method="post" action="/accounts/upload" enctype="multipart/form-data">
     <div class="row g-2 align-items-end">
-      {% if legacy_import %}
+      {% if legacy_import or tdata_import %}
       <div class="col-md-2">
         <label class="form-label small mb-1">Идентификатор</label>
         <input class="form-control form-control-sm" name="identifier" placeholder="16368414925">
@@ -98,8 +108,8 @@
         <input class="form-control form-control-sm" name="proxy" placeholder="host:port:логин:пароль" autocomplete="off">
       </div>
       <div class="col-md-3">
-        <label class="form-label small mb-1">TData (.zip) или .session</label>
-        <input class="form-control form-control-sm" type="file" name="auth_file" accept=".session,.zip">
+        <label class="form-label small mb-1">{{ "TData (.zip)" if tdata_import else "" }}{{ " или " if tdata_import and legacy_import else "" }}{{ ".session" if legacy_import else "" }}</label>
+        <input class="form-control form-control-sm" type="file" name="auth_file" accept="{{ '.zip' if tdata_import else '' }}{{ ',' if tdata_import and legacy_import else '' }}{{ '.session' if legacy_import else '' }}">
       </div>
       {% endif %}
       <div class="col-md-3">
@@ -113,14 +123,11 @@
   </form>
   <div class="section-hint mt-2">
     Excel: столбцы Аккаунт, Имя менеджера, Дисклеймер, Статус, Прокси.
-    {% if legacy_import %}
-    <br><b>TData</b> импортируется как <b>новый отдельный сеанс</b> (со своим ключом — он не делится с Telegram Desktop и
-    виден в Telegram как отдельное устройство), а всё общение с Telegram при импорте идёт <b>через прокси аккаунта</b>,
-    поэтому прокси обязателен. <b>Один аккаунт:</b> идентификатор + прокси + zip с папкой <code>tdata</code>.
-    <b>Много аккаунтов сразу:</b> сначала загрузите Excel (столбцы «Аккаунт» и «Прокси» — у каждого свой прокси), затем один
-    zip со всеми папками <code>tdata</code> (например <code>1\tdata</code>, <code>2\tdata</code>, …) — они раздаются по
-    идентификаторам без сессии в порядке возрастания. Перед импортом закройте Telegram Desktop с этим профилем.
-    Импортированные аккаунты создаются <b>выключенными</b> — включите автоответчик через 30–60 минут.
+    {% if tdata_import %}
+    <br>Один аккаунт из TData: идентификатор + прокси + zip с папкой <code>tdata</code>. <b>Много аккаунтов сразу</b> —
+    удобнее через <a href="/accounts/import-tdata">«Импорт TData (массово)»</a> (перетаскивание .zip/.rar, идентификаторы
+    из названий папок, прокси списком). TData импортируется как <b>новый отдельный сеанс</b> (не делит ключ с Telegram
+    Desktop) и <b>только через прокси аккаунта</b>; аккаунт создаётся <b>выключенным</b> — включите через 30–60 минут.
     {% endif %}
   </div>
 </div>

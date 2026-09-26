@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}Импорт TData{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div class="page-eyebrow">// system · accounts · tdata</div>
+  <h1>Импорт из TData (массово)</h1>
+  <p>Перетащите архивы .zip / .rar с папками профилей Telegram Desktop — аккаунты добавятся пачкой, каждый как новый отдельный сеанс через свой прокси.</p>
+</div>
+
+{% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+{% if not enabled %}<div class="alert alert-warning">Импорт TData отключён в настройках (<code>ALLOW_TDATA_IMPORT=false</code>).</div>{% endif %}
+{% if not available %}<div class="alert alert-warning">Импорт TData сейчас недоступен: {{ hint }}</div>{% endif %}
+{% if active_token %}<div class="alert alert-info">Сейчас идёт другой импорт — <a href="/accounts/import-tdata/{{ active_token }}">открыть ход выполнения</a>.</div>{% endif %}
+
+<form method="post" action="/accounts/import-tdata" enctype="multipart/form-data" id="import-form" autocomplete="off">
+  <div class="card p-3 mb-3">
+    <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Выбрать архивы">
+      <i class="bi bi-cloud-arrow-up fs-2"></i>
+      <div class="mt-2"><b>Перетащите сюда архивы</b> или нажмите, чтобы выбрать</div>
+      <div class="section-hint">.zip и .rar; в одном архиве может быть одна или много папок <code>tdata</code></div>
+    </div>
+    <input type="file" id="archives" name="archives" accept=".zip,.rar" multiple hidden>
+    <ul id="filelist" class="list-unstyled small mt-2 mb-0"></ul>
+  </div>
+
+  <div class="card p-3 mb-3">
+    <h6 class="mb-2">Прокси (обязательно)</h6>
+    <div class="section-hint mb-2">
+      По строке на аккаунт, <b>в том же порядке</b>, что и аккаунты (порядок — по названиям папок: 1, 2, 10…). Любой формат:
+      <code>host:port:логин:пароль</code>, <code>логин:пароль@host:port</code>, <code>socks5://…</code>. Один прокси — один аккаунт.
+      Если аккаунт уже есть в таблице и у него сохранён прокси, поле можно оставить пустым.
+    </div>
+    <textarea name="proxies" class="form-control form-control-sm" rows="5" placeholder="1.2.3.4:1080:user:pass&#10;5.6.7.8:1080:user:pass" spellcheck="false">{{ v.proxies or '' }}</textarea>
+  </div>
+
+  <div class="card p-3 mb-3">
+    <details {{ "open" if v.identifiers else "" }}>
+      <summary class="small">Идентификаторы (необязательно)</summary>
+      <div class="section-hint my-2">
+        По умолчанию берутся из названий папок (<code>1\tdata</code> → <code>1</code>) или из имени архива, если <code>tdata</code>
+        лежит в корне. Чтобы задать свои — по строке на аккаунт, в том же порядке.
+      </div>
+      <textarea name="identifiers" class="form-control form-control-sm" rows="3" spellcheck="false">{{ v.identifiers or '' }}</textarea>
+    </details>
+    <div class="form-check mt-3">
+      <input class="form-check-input" type="checkbox" name="replace_existing" id="replace" {{ "checked" if v.replace_existing else "" }}>
+      <label class="form-check-label small" for="replace">Заменить сессию у уже существующих аккаунтов (иначе они пропускаются)</label>
+    </div>
+  </div>
+
+  <div class="card p-3 mb-3">
+    <details>
+      <summary class="small">Пароли (если нужны)</summary>
+      <div class="row g-2 mt-1">
+        <div class="col-md-4">
+          <label class="form-label small mb-1">Пароль архива</label>
+          <input type="password" name="archive_password" class="form-control form-control-sm" autocomplete="new-password">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label small mb-1">Локальный код Telegram Desktop</label>
+          <input type="password" name="tdata_passcode" class="form-control form-control-sm" autocomplete="new-password">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label small mb-1">Облачный пароль (2FA)</label>
+          <input type="password" name="cloud_password" class="form-control form-control-sm" autocomplete="new-password">
+        </div>
+      </div>
+      <div class="section-hint mt-2">Пароль применяется ко всем аккаунтам в этой загрузке; у аккаунтов с разными паролями импортируйте отдельными пачками. Пароли нигде не сохраняются.</div>
+    </details>
+  </div>
+
+  <div class="section-hint mb-3">
+    Как это работает: для каждого аккаунта создаётся <b>новый отдельный сеанс</b> (свой ключ; в Telegram он виден как отдельное
+    устройство и не делит ключ с Telegram Desktop), все подключения идут <b>через прокси аккаунта</b>. Аккаунты входят по одному с паузами.
+    <b>Перед импортом закройте Telegram Desktop с этими профилями</b> — иначе Telegram может аннулировать ключ. Импортированные
+    аккаунты создаются <b>выключенными</b> — включите автоответчик через 30–60 минут.
+    Кеш профиля (user_data, эмодзи) при распаковке пропускается, поэтому большие архивы допустимы.
+  </div>
+
+  <button class="btn btn-primary" id="submit-btn" {{ "disabled" if (not enabled or not available) else "" }}>Импортировать</button>
+  <a class="btn btn-outline-secondary" href="/accounts">Назад</a>
+  <span id="uploading" class="small text-muted ms-2" style="display:none">Загружаем и проверяем… не закрывайте страницу</span>
+</form>
+
+<script>
+(function () {
+  var zone = document.getElementById('dropzone'), input = document.getElementById('archives'),
+      list = document.getElementById('filelist'), form = document.getElementById('import-form');
+  function size(n) { return n > 1048576 ? (n / 1048576).toFixed(1) + ' МБ' : Math.max(1, Math.round(n / 1024)) + ' КБ'; }
+  function render() {
+    list.textContent = '';
+    Array.prototype.forEach.call(input.files, function (f) {
+      var li = document.createElement('li');
+      li.textContent = '📦 ' + f.name + ' (' + size(f.size) + ')';   // textContent: имя файла — пользовательский ввод
+      list.appendChild(li);
+    });
+  }
+  zone.addEventListener('click', function () { input.click(); });
+  zone.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); } });
+  ['dragenter', 'dragover'].forEach(function (ev) {
+    zone.addEventListener(ev, function (e) { e.preventDefault(); zone.classList.add('dragover'); });
+  });
+  ['dragleave', 'drop'].forEach(function (ev) {
+    zone.addEventListener(ev, function (e) { e.preventDefault(); zone.classList.remove('dragover'); });
+  });
+  zone.addEventListener('drop', function (e) {
+    if (e.dataTransfer && e.dataTransfer.files.length) { input.files = e.dataTransfer.files; render(); }
+  });
+  input.addEventListener('change', render);
+  form.addEventListener('submit', function () {
+    document.getElementById('submit-btn').disabled = true;
+    document.getElementById('uploading').style.display = 'inline';
+  });
+})();
+</script>
+{% endblock %}

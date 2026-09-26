@@ -361,6 +361,23 @@ code { color: var(--accent3); background: var(--panel-bg-alt); padding: .1em .35
 }
 .sidebar-toggle:hover, .sidebar-toggle:focus-visible { border-color: var(--accent); color: var(--accent); }
 
+/* ---- Drag & drop зона загрузки архивов ---- */
+.dropzone {
+  border: 2px dashed var(--panel-border);
+  border-radius: .75rem;
+  padding: 2rem 1rem;
+  text-align: center;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color .15s, background .15s, color .15s;
+}
+.dropzone:hover, .dropzone:focus-visible, .dropzone.dragover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  outline: none;
+}
+
 /* ---- Auth screen ---- */
 .auth-shell {
   min-height: 100vh;

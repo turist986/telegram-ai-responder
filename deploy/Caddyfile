@@ -20,9 +20,10 @@ your-domain.example {
 		file_server
 	}
 
-	# Загрузка .session / TData.zip / managers.xlsx через панель — лимит побольше дефолтного.
+	# Загрузка архивов TData (.zip/.rar, профили Desktop бывают в сотни МБ), .session,
+	# managers.xlsx через панель — лимит побольше: с 20MB большие архивы отклонялись бы.
 	request_body {
-		max_size 20MB
+		max_size 1GB
 	}
 
 	reverse_proxy 127.0.0.1:8000 {

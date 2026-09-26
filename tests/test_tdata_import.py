@@ -95,6 +95,87 @@ class ConversionTests(unittest.TestCase):
             self._run(self.PROXY)
 
 
+def make_synthetic_tdata(dest: Path) -> None:
+    """Настоящая TData в формате Desktop, собранная самим opentele из СЛУЧАЙНОГО ключа —
+    не принадлежит ни одному реальному аккаунту, сети не касается."""
+    import asyncio
+    import os
+
+    from opentele.api import API, UseCurrentSession
+    from opentele.td import TDesktop
+    from opentele.tl import TelegramClient
+    from telethon.crypto import AuthKey
+    from telethon.sessions import MemorySession
+
+    async def build():
+        s = MemorySession()
+        s.set_dc(2, "149.154.167.51", 443)
+        s.auth_key = AuthKey(os.urandom(256))
+        client = TelegramClient(s, api=API.TelegramDesktop)
+        client.UserId = 424242
+        tdesk = await TDesktop.FromTelethon(client, flag=UseCurrentSession)
+        tdesk.SaveTData(str(dest))
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    asyncio.run(build())
+
+
+@unittest.skipUnless(HAVE_OPENTELE, "opentele не установлен")
+class RealLibraryTests(unittest.TestCase):
+    """Реальный opentele (без заглушек), но полностью офлайн."""
+
+    def setUp(self):
+        import tempfile
+
+        self._t = tempfile.TemporaryDirectory()
+        self.addCleanup(self._t.cleanup)
+        self.tmp = Path(self._t.name)
+        make_synthetic_tdata(self.tmp / "acc" / "tdata")
+
+    def test_synthetic_tdata_is_real_desktop_format_and_loads(self):
+        from opentele.td import TDesktop
+
+        names = {p.name for p in (self.tmp / "acc" / "tdata").iterdir()}
+        self.assertIn("key_datas", names)
+        self.assertIn("D877F783D5D3EF8C", names)                 # та же структура, что у настоящего Telegram Desktop
+        td = TDesktop(str(self.tmp / "acc" / "tdata"))
+        self.assertTrue(td.isLoaded())
+        self.assertEqual(td.accountsCount, 1)
+
+    def test_archive_of_real_format_tdata_goes_through_prepare_batch(self):
+        import zipfile
+
+        from app.services import tdata_batch as tb
+
+        zpath = self.tmp / "profiles.zip"
+        with zipfile.ZipFile(zpath, "w") as zf:
+            for f in (self.tmp / "acc" / "tdata").rglob("*"):
+                if f.is_file():
+                    zf.write(f, "7/tdata/" + f.relative_to(self.tmp / "acc" / "tdata").as_posix())
+        with SessionLocal() as db:
+            job = tb.prepare_batch(db, [("profiles.zip", zpath)], self.tmp / "work",
+                                   proxies_text="10.5.5.5:1080:u:p")
+        self.assertEqual([i.identifier for i in job.items], ["7"])
+        from opentele.td import TDesktop
+
+        self.assertTrue(TDesktop(str(job.items[0].tdata_dir)).isLoaded())    # после распаковки профиль читается
+
+    def test_no_proxy_refused_and_broken_tdata_explained_before_any_network(self):
+        from app.services.session_utils import tdata_to_session
+
+        with self.assertRaises(RuntimeError) as cm:
+            tdata_to_session(self.tmp / "acc" / "tdata", self.tmp / "o.session", None)
+        self.assertIn("прокси", str(cm.exception).lower())
+        bad = self.tmp / "bad" / "tdata"
+        bad.mkdir(parents=True)
+        (bad / "key_datas").write_bytes(b"garbage")
+        proxy = (2, "127.0.0.1", 9, True, None, None)                        # до сети дело не дойдёт
+        with self.assertRaises(RuntimeError) as cm:
+            tdata_to_session(bad, self.tmp / "o2.session", proxy)
+        self.assertIn("TData", str(cm.exception))
+        self.assertFalse((self.tmp / "o2.session").exists())
+
+
 def _zip(*names: str) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
@@ -229,7 +310,7 @@ class RouterTests(unittest.TestCase):
             self.assertFalse(db.query(Account).filter_by(identifier="2").one().session_path)
 
     def test_import_can_be_switched_off(self):
-        with patch.object(settings, "allow_legacy_session_import", False):
+        with patch.object(settings, "allow_tdata_import", False):
             r = self.client.post("/accounts/upload-tdata",
                                  data={"identifier": "z", "proxy": "socks5://10.3.3.3:1080"},
                                  files={"tdata_zip": ("t.zip", _zip("tdata/key_datas"))})

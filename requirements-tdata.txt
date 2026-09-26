@@ -1,11 +1,13 @@
-# Опциональная зависимость — только для загрузки TData (папка Telegram
-# Desktop) через панель, конвертирует её в .session. Не входит в основной
-# requirements.txt, потому что тянет tgcrypto — а тот собирается из
-# исходников и требует установленный компилятор C++ (на Windows — "Microsoft
-# C++ Build Tools", на Linux — build-essential). Если он не нужен (загружаете
-# только готовые .session файлы через scripts/create_session.py) — просто
-# не устанавливайте этот файл.
+# Зависимости импорта TData (папка профиля Telegram Desktop) ставятся СКРИПТОМ:
 #
-# pip install -r requirements-tdata.txt
-
-opentele==1.15.1
+#     python scripts/install_tdata_deps.py
+#
+# Почему не `pip install -r`: opentele тянет пакет tgcrypto, который собирается из
+# исходников и требует компилятор C++ (Microsoft C++ Build Tools / build-essential) —
+# на чистом сервере установка падает. Скрипт ставит opentele без tgcrypto (--no-deps),
+# а PyQt5 — отдельно; вместо tgcrypto проект использует чистый Python-шим
+# (app/services/_opentele_compat.py).
+#
+# Ручной эквивалент:
+#     pip install PyQt5
+#     pip install --no-deps opentele==1.15.1
