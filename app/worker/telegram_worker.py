@@ -26,7 +26,7 @@ from ..services.device_profile import client_kwargs as profile_client_kwargs
 from ..services.disclaimer import build_disclaimer
 from ..services.flood_guard import compute_pause, next_streak
 from ..services.knowledge_base import load_knowledge_base, load_prompt_template
-from ..services.llm_client import LLMError, generate_reply
+from ..services.llm_client import LLMError, generate_reply, is_llm_error_text
 from ..services.chat_status import INBOUND, OUTBOUND_MANUAL
 from ..services.chat_status import establish_status as establish_chat_status
 from ..services.chat_status import get_status as get_chat_status
@@ -648,6 +648,9 @@ class AccountWorker:
                     account_id=self.account_id, chat_id=chat_id, role="assistant", content=reply_text
                 )
             )
+            acc = db.get(Account, self.account_id)
+            if acc and is_llm_error_text(acc.last_error):
+                acc.last_error = None   # ответ ушёл — старая ошибка нейросети (например, неверный ключ) неактуальна
             db.commit()
         return True
 

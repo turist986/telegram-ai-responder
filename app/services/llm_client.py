@@ -12,6 +12,33 @@ class LLMError(RuntimeError):
     pass
 
 
+_HTTP_HINTS = {
+    401: "ключ отклонён: он неверный, отозван или выдан другим провайдером — проверьте ключ и выбранного "
+         "провайдера в «Настройки» → «Нейросеть» (ключ без лишних пробелов и кавычек)",
+    402: "на балансе провайдера нет средств — пополните счёт",
+    403: "доступ запрещён: у ключа нет прав или регион сервера не поддерживается провайдером",
+    404: "не найдены модель или адрес API — проверьте название модели и base_url в «Настройки» → «Нейросеть»",
+    429: "превышен лимит запросов провайдера — подождите или смените тариф/провайдера",
+}
+
+
+_LLM_ERROR_PREFIXES = ("Нейросеть ", "Ошибка API", "Не задан API-ключ", "API недоступен")
+
+
+def is_llm_error_text(text: str | None) -> bool:
+    """Это сохранённая в аккаунте ошибка именно нейросети (её можно сбросить после удачного ответа)."""
+    return bool(text) and text.startswith(_LLM_ERROR_PREFIXES)
+
+
+def http_error_text(provider_label: str, status: int) -> str:
+    """Понятный текст вместо голого «Ошибка API: 401»: кто ответил и что делать."""
+    who = f"«{provider_label}»" if provider_label else "ИИ-провайдера"
+    hint = _HTTP_HINTS.get(status)
+    if hint:
+        return f"Нейросеть {who}, ошибка {status}: {hint}"
+    return f"Нейросеть {who} вернула ошибку {status}"
+
+
 def _api_key_for(provider_key: str) -> str | None:
     return getattr(settings, PROVIDERS[provider_key]["key_field"])
 
@@ -49,12 +76,13 @@ async def generate_reply(
     resolved_base_url = (base_url or config["base_url"]).rstrip("/")
 
     if config["kind"] == "anthropic":
-        return await _call_anthropic(resolved_base_url, api_key, resolved_model, system_prompt, history, user_message)
-    return await _call_openai_compatible(resolved_base_url, api_key, resolved_model, system_prompt, history, user_message)
+        return await _call_anthropic(resolved_base_url, api_key, resolved_model, system_prompt, history, user_message, config["label"])
+    return await _call_openai_compatible(resolved_base_url, api_key, resolved_model, system_prompt, history, user_message, config["label"])
 
 
 async def _call_openai_compatible(
-    base_url: str, api_key: str, model: str, system_prompt: str, history: list[dict], user_message: str
+    base_url: str, api_key: str, model: str, system_prompt: str, history: list[dict], user_message: str,
+    provider_label: str = "",
 ) -> str:
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(history)
@@ -82,7 +110,7 @@ async def _call_openai_compatible(
                 last_exc = exc
                 if exc.response.status_code in (429, 500, 502, 503) and attempt < 2:
                     continue
-                raise LLMError(f"Ошибка API: {exc.response.status_code}") from exc
+                raise LLMError(http_error_text(provider_label, exc.response.status_code)) from exc
             except httpx.HTTPError as exc:
                 logger.warning("LLM network error (attempt %s): %s", attempt, exc)
                 last_exc = exc
@@ -94,7 +122,8 @@ async def _call_openai_compatible(
 
 
 async def _call_anthropic(
-    base_url: str, api_key: str, model: str, system_prompt: str, history: list[dict], user_message: str
+    base_url: str, api_key: str, model: str, system_prompt: str, history: list[dict], user_message: str,
+    provider_label: str = "",
 ) -> str:
     messages = list(history)
     messages.append({"role": "user", "content": user_message})
@@ -120,7 +149,7 @@ async def _call_anthropic(
                 last_exc = exc
                 if exc.response.status_code in (429, 500, 502, 503) and attempt < 2:
                     continue
-                raise LLMError(f"Ошибка API: {exc.response.status_code}") from exc
+                raise LLMError(http_error_text(provider_label, exc.response.status_code)) from exc
             except httpx.HTTPError as exc:
                 logger.warning("LLM network error (attempt %s): %s", attempt, exc)
                 last_exc = exc

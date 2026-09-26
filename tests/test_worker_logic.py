@@ -167,6 +167,49 @@ class FloodTests(WorkerBase):
         ev.reply.assert_awaited_once()
         w._pacer.next_delay.assert_called_once()
 
+    def _ready(self):
+        acc, w = self.make_worker()
+        w.client = MagicMock()
+
+        class _Ctx:
+            async def __aenter__(self): return None
+            async def __aexit__(self, *a): return False
+        w.client.action = MagicMock(return_value=_Ctx())
+        w._pacer.next_delay = MagicMock(return_value=0.0)
+        return acc, w
+
+    async def test_llm_401_is_recorded_readably_and_cleared_after_a_good_reply(self):
+        from app.services.llm_client import LLMError, http_error_text
+
+        _save()
+        acc, w = self._ready()
+        bad = AsyncMock(side_effect=LLMError(http_error_text("DeepSeek", 401)))
+        with patch.object(tw, "generate_reply", bad), patch.object(tw, "typing_seconds", return_value=0.0):
+            await w._process(_event())
+        with SessionLocal() as db:
+            err = db.get(Account, acc.id).last_error
+        self.assertIn("401", err)
+        self.assertIn("ключ", err)                       # понятно, что делать, а не «Ошибка API: 401»
+
+        ev = _event()
+        with patch.object(tw, "generate_reply", AsyncMock(return_value="ответ")), \
+             patch.object(tw, "typing_seconds", return_value=0.0):
+            self.assertTrue(await w._process(ev))
+        with SessionLocal() as db:
+            self.assertIsNone(db.get(Account, acc.id).last_error)   # ключ исправили — красная ошибка ушла
+
+    async def test_good_reply_does_not_clear_unrelated_errors(self):
+        _save()
+        acc, w = self._ready()
+        with SessionLocal() as db:
+            db.get(Account, acc.id).last_error = "Ключ сессии больше не действителен"
+            db.commit()
+        with patch.object(tw, "generate_reply", AsyncMock(return_value="ответ")), \
+             patch.object(tw, "typing_seconds", return_value=0.0):
+            await w._process(_event())
+        with SessionLocal() as db:
+            self.assertEqual(db.get(Account, acc.id).last_error, "Ключ сессии больше не действителен")
+
 
 class ReconcileTests(WorkerBase):
     async def test_no_proxy_never_started_and_paused_skipped(self):
