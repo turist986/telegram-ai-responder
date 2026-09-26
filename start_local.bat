@@ -69,7 +69,8 @@ start "AI Responder - site" cmd /k venv\Scripts\python.exe -m uvicorn app.main:a
 timeout /t 4 /nobreak >nul
 start "AI Responder - worker" cmd /k venv\Scripts\python.exe run_worker.py
 
-start "" cmd /c "timeout /t 2 >nul & start http://localhost:8000"
+REM update.bat запускает этот файл с аргументом nobrowser — без открытия браузера
+if /i not "%~1"=="nobrowser" start "" cmd /c "timeout /t 2 >nul & start http://localhost:8000"
 
 echo Запущено: панель http://localhost:8000
 timeout /t 3 /nobreak >nul

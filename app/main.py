@@ -1,12 +1,13 @@
 import logging
 
 from fastapi import FastAPI
-from fastapi.responses import RedirectResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .auth import NotAuthenticated
 from .config import BASE_DIR
 from .database import init_db
+from .version import get_version
 from .routers import accounts, api_credentials, auth_router, dashboard, logs, onboarding, settings_router, tdata_import
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -24,6 +25,13 @@ async def not_authenticated_handler(request, exc):
 @app.on_event("startup")
 async def on_startup():
     init_db()
+
+
+@app.get("/version", response_class=PlainTextResponse)
+async def version():
+    """Хеш коммита РАБОТАЮЩЕГО кода (без входа: не секрет). update.bat по нему проверяет,
+    что после обновления действительно поднялась новая версия, а не старый процесс."""
+    return get_version()
 
 
 app.include_router(auth_router.router)
