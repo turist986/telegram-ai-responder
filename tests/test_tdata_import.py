@@ -295,13 +295,13 @@ class RouterTests(unittest.TestCase):
     def test_bulk_shared_proxy_imports_nothing(self):
         self._bulk_accounts({"1": "socks5://u:p@10.1.1.1:1080", "2": "http://u:p@10.1.1.1:1080"})
         r = self._bulk()
-        self.assertIn("один прокси", self._msg(r))
+        self.assertIn("один и тот же прокси", self._msg(r))
         self.assertEqual(self.calls, [])
 
     def test_bulk_pool_host_with_different_logins_is_not_shared(self):
         self._bulk_accounts({"1": "socks5://a:1@pool.example:10000", "2": "socks5://b:2@pool.example:10000"})
         r = self._bulk()
-        self.assertNotIn("один прокси", self._msg(r))
+        self.assertNotIn("один и тот же прокси", self._msg(r))
         self.assertEqual(len(self.calls), 2)
 
     def test_bulk_one_failure_does_not_cancel_the_rest(self):

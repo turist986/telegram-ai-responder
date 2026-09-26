@@ -115,7 +115,7 @@ class PrepareTests(Base):
         arch = [self.archive("a.zip", "1/tdata/key_datas", "2/tdata/key_datas")]
         with self.assertRaises(tb.TDataBatchError) as cm:
             self.prepare(arch, proxies_text="10.1.1.1:1080:u:p\nu:p@10.1.1.1:1080")     # одна и та же строка в двух форматах
-        self.assertIn("один прокси", str(cm.exception))
+        self.assertIn("один и тот же прокси", str(cm.exception))
         with SessionLocal() as db:
             db.add(Account(identifier="other", proxy="socks5://u:p@10.2.2.2:1080"))
             db.commit()

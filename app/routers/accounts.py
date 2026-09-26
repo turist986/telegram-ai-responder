@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import datetime as dt
 import logging
 import random
@@ -31,7 +31,7 @@ from ..services.proxy import (
     test_proxy,
 )
 from ..services import worker_control
-from ..services.onboarding import list_api_pools, proxy_in_use
+from ..services.onboarding import list_api_pools, proxy_conflict_text, proxy_in_use
 from ..services.session_files import (
     bind_session as _bind_session,
     fresh_session_path as _fresh_session_path,
@@ -183,7 +183,7 @@ async def set_proxy(
         owner = proxy_in_use(db, normalized, exclude_identifier=account.identifier)
         if owner:
             return RedirectResponse(
-                f"/accounts?msg={quote('Этот прокси уже используется аккаунтом ' + owner + '. Нужен отдельный прокси на каждый аккаунт')}",
+                f"/accounts?msg={quote(proxy_conflict_text(normalized, owner))}",
                 status_code=303,
             )
 
@@ -264,7 +264,7 @@ def _resolve_account_proxy(db: Session, identifier: str, proxy_input: str) -> st
             raise RuntimeError(str(exc)) from exc
         owner = proxy_in_use(db, normalized, exclude_identifier=identifier)
         if owner:
-            raise RuntimeError(f"этот прокси уже используется аккаунтом {owner} — нужен отдельный на каждый аккаунт")
+            raise RuntimeError(proxy_conflict_text(normalized, owner))
         return normalized
     if account is not None and account.proxy:
         return account.proxy
@@ -395,7 +395,7 @@ async def upload_all(
                         key = proxy_identity(acc.proxy)
                         if key in seen:
                             return RedirectResponse(
-                                f"/accounts?msg={quote(f'Аккаунты {seen[key]} и {ident} используют один прокси — нужен отдельный на каждый. Ничего не импортировано.')}",
+                                f"/accounts?msg={quote(f'Аккаунты {seen[key]} и {ident} используют один и тот же прокси (совпадают хост, порт, логин и пароль) — нужен отдельный на каждый. Ничего не импортировано.')}",
                                 status_code=303,
                             )
                         seen[key] = ident

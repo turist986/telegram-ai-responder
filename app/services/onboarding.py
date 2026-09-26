@@ -96,6 +96,15 @@ def proxy_in_use(db: Session, proxy: str, exclude_identifier: str | None = None)
     return None
 
 
+def proxy_conflict_text(proxy: str, owner: str) -> str:
+    """Что именно совпало с чужим прокси (без пароля) и что с этим делать."""
+    host, port, user, _pw = proxy_identity(proxy)
+    who = f"логин «{user}»" if user else "без логина"
+    return (f"Этот прокси целиком совпадает с прокси аккаунта «{owner}»: хост {host}:{port}, {who} и пароль. "
+            f"Нужен другой прокси — у него должен отличаться логин или пароль (на одном хосте может быть "
+            f"много прокси с разными логинами)")
+
+
 def validate_new_proxy(db: Session, raw_proxy: str, exclude_identifier: str | None = None) -> str:
     """Нормализует прокси, проверяет формат и уникальность. Бросает OnboardingError."""
     try:
@@ -107,7 +116,7 @@ def validate_new_proxy(db: Session, raw_proxy: str, exclude_identifier: str | No
         raise OnboardingError(str(exc)) from exc
     owner = proxy_in_use(db, normalized, exclude_identifier)
     if owner:
-        raise OnboardingError(f"Этот прокси уже используется аккаунтом {owner}. Нужен отдельный прокси на каждый аккаунт")
+        raise OnboardingError(proxy_conflict_text(normalized, owner))
     return normalized
 
 

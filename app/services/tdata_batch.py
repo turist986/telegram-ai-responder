@@ -28,7 +28,7 @@ from ..config import settings
 from ..database import SessionLocal
 from ..models import Account
 from .archive_utils import ArchiveError, extract_tdata_archive
-from .onboarding import proxy_in_use
+from .onboarding import proxy_conflict_text, proxy_in_use
 from .proxy import ProxyConfigError, mask_proxy, normalize_proxy, parse_proxy, proxy_identity
 from .session_files import discard_session_file, finalize_tdata_account, fresh_session_path
 from .session_utils import find_tdata_dirs, tdata_to_session
@@ -168,11 +168,11 @@ def prepare_batch(
             continue
         key = proxy_identity(proxy)
         if key in seen:
-            raise TDataBatchError(f"Аккаунты {seen[key]} и {ident} используют один прокси — нужен отдельный на каждый")
+            raise TDataBatchError(f"Аккаунты {seen[key]} и {ident} используют один и тот же прокси (совпадают хост, порт, логин и пароль) — нужен отдельный на каждый")
         seen[key] = ident
         owner = proxy_in_use(db, proxy, exclude_identifier=ident)
         if owner:
-            raise TDataBatchError(f"Прокси аккаунта {ident} уже используется аккаунтом {owner} — нужен отдельный на каждый")
+            raise TDataBatchError(f"Аккаунт {ident}: {proxy_conflict_text(proxy, owner)}")
 
     items = []
     for (name, root, d, _stem), ident, proxy in zip(found, idents, proxies):
