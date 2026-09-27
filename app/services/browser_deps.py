@@ -15,6 +15,7 @@ C:\\Users\\<кто ставил>\\AppData\\Local\\ms-playwright. Сайт же �
 проекта не зависит от того, какая учётная запись ставит зависимости и какая потом запускает
 сайт — и переезжает вместе с проектом при переносе на другую машину."""
 import os
+import time
 from pathlib import Path
 
 # .../app/services/browser_deps.py -> .../  (корень проекта). Намеренно не через app.config —
@@ -56,6 +57,62 @@ def ensure_env_set() -> Path:
     path = browsers_path()
     os.environ[_VAR] = str(path)
     return path
+
+
+# Файл браузера может существовать и при этом не запускаться: например, сайт работает как
+# служба Windows (Планировщик заданий, учётка NT AUTHORITY\SYSTEM) без рабочего стола —
+# Chromium (даже headless) там иногда не может создать служебное окно и падает с ошибкой вида
+# "Failed to register the window class for a message-only window" / "run out of resources".
+# playwright_available() этого не ловит (он не запускает браузер, только проверяет файл), а
+# каждая попытка запуска — это реальный процесс chrome-headless-shell.exe, который стоит
+# ресурсов даже при мгновенном падении. Чтобы менеджер, кликающий повторно, не плодил такие
+# попытки одну за другой, неудачный ЗАПУСК запоминается на время — дальше сразу отдаём ручной
+# ввод api_id с той же причиной, без нового процесса.
+_LAUNCH_FAILURE_COOLDOWN = 300  # 5 минут
+_launch_failure: dict = {}
+
+
+def record_launch_failure(message: str) -> None:
+    _launch_failure["until"] = time.monotonic() + _LAUNCH_FAILURE_COOLDOWN
+    _launch_failure["message"] = message
+
+
+def clear_launch_failure() -> None:
+    _launch_failure.clear()
+
+
+def recent_launch_failure() -> str | None:
+    """Текст недавней ошибки запуска, если она была меньше _LAUNCH_FAILURE_COOLDOWN назад."""
+    if _launch_failure.get("until", 0) > time.monotonic():
+        return _launch_failure.get("message")
+    return None
+
+
+_WINDOWS_SERVICE_HINTS = (
+    "message-only window", "message_window.cc", "run out of resources",
+    "0x36b7", "sxs_key_not_found",
+)
+
+
+def describe_launch_error(exc: BaseException) -> str:
+    """Текст ошибки запуска Chromium: отличает «сайт работает как служба Windows без
+    рабочего стола» (частая причина именно этого падения) от прочих случаев."""
+    text = f"{type(exc).__name__}: {exc}"
+    if any(h in text.lower() for h in _WINDOWS_SERVICE_HINTS):
+        return (
+            "Chromium не может создать своё окно — это типично, когда сайт работает как служба "
+            "Windows (Планировщик заданий, учётка NT AUTHORITY\\SYSTEM) без рабочего стола, а не "
+            "проблема с самим Chromium. Варианты: (1) выбрать существующий пул api_id или ввести "
+            "api_id/api_hash вручную (создайте приложение на my.telegram.org с прокси этого "
+            "аккаунта) — работает всегда, независимо от режима запуска сайта; (2) запускать веб-"
+            "панель не от SYSTEM, а от обычной учётной записи с активным рабочим столом (в "
+            "Планировщике заданий — тип входа «Обычный», не «Служба», и активная RDP-сессия "
+            "этого пользователя на сервере)."
+        )
+    return (
+        f"Не удалось запустить Chromium ({text}). Выполните на сервере: "
+        f"venv\\Scripts\\python.exe scripts\\install_browser_deps.py"
+    )
 
 
 def playwright_available() -> tuple[bool, str]:

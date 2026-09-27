@@ -9,7 +9,7 @@ from ..auth import require_login
 from ..database import get_db
 from ..services import onboarding as ob
 from ..services.api_app_creator import CreatorError
-from ..services.browser_deps import playwright_available
+from ..services.browser_deps import playwright_available, recent_launch_failure
 from ..services.settings_store import get_protection
 from ..templating import templates
 
@@ -29,6 +29,9 @@ async def _form(request: Request, db: Session, error: str = "", values: dict | N
     # the Async API instead"), поэтому обязательно в отдельном потоке, как и остальные
     # блокирующие вызовы в этом мастере (test_proxy, choose_ip_family).
     browser_ok, browser_hint = await asyncio.to_thread(playwright_available)
+    failed_recently = recent_launch_failure()
+    if failed_recently:
+        browser_ok, browser_hint = False, failed_recently
     return templates.TemplateResponse(
         "add_account.html",
         {

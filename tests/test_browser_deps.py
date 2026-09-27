@@ -77,6 +77,52 @@ class PathResolutionTests(unittest.TestCase):
             self.assertEqual(bd._env_file_value(), r"C:\quoted\path")
 
 
+class LaunchErrorTests(unittest.TestCase):
+    """Регрессия из живого отчёта: файл Chromium на месте (playwright_available()==True), но
+    реальный запуск падает — сайт работает как служба Windows (Планировщик, SYSTEM) без
+    рабочего стола: 'Failed to register the window class for a message-only window' /
+    'Your computer has run out of resources'."""
+
+    def test_windows_service_signature_gets_specific_actionable_message(self):
+        exc = RuntimeError(
+            "TargetClosedError: BrowserType.launch: Target page, context or browser has been "
+            "closed Browser logs: <launching> ... [err] [0927/014442.612:ERROR:base\\win\\"
+            "message_window.cc:124] Failed to register the window class for a message-only "
+            "window: The requested lookup key was not found in any active activation context. "
+            "(0x36B7) [err] Your computer has run out of resources. Sign out of Windows or "
+            "restart your computer and try again."
+        )
+        msg = bd.describe_launch_error(exc)
+        self.assertIn("служба Windows", msg)
+        self.assertIn("SYSTEM", msg)
+        self.assertIn("вручную", msg)
+        self.assertNotIn("install_browser_deps.py", msg)  # это НЕ проблема отсутствия/пути браузера
+
+    def test_other_errors_keep_the_generic_install_hint(self):
+        msg = bd.describe_launch_error(RuntimeError("Executable doesn't exist at C:\\nowhere\\chrome.exe"))
+        self.assertIn("install_browser_deps.py", msg)
+        self.assertNotIn("служба Windows", msg)
+
+
+class LaunchFailureCooldownTests(unittest.TestCase):
+    def setUp(self):
+        bd.clear_launch_failure()
+        self.addCleanup(bd.clear_launch_failure)
+
+    def test_recorded_failure_is_recalled_and_expires(self):
+        self.assertIsNone(bd.recent_launch_failure())
+        bd.record_launch_failure("боль и страдание")
+        self.assertEqual(bd.recent_launch_failure(), "боль и страдание")
+        with patch.object(bd, "_LAUNCH_FAILURE_COOLDOWN", -1):
+            bd.record_launch_failure("уже устарело")
+            self.assertIsNone(bd.recent_launch_failure())
+
+    def test_clear_removes_it(self):
+        bd.record_launch_failure("x")
+        bd.clear_launch_failure()
+        self.assertIsNone(bd.recent_launch_failure())
+
+
 try:
     import playwright.sync_api  # noqa: F401
     HAVE_PLAYWRIGHT_PKG = True

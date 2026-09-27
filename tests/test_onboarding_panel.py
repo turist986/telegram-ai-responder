@@ -96,6 +96,10 @@ class OnboardingFlowTests(unittest.IsolatedAsyncioTestCase):
         settings.sessions_dir.mkdir(parents=True, exist_ok=True)
 
     def setUp(self):
+        from app.services.browser_deps import clear_launch_failure
+
+        clear_launch_failure()  # изоляция от других тестовых файлов, где падение запуска кэшируется
+        self.addCleanup(clear_launch_failure)
         FakeCreator.fail_start = FakeCreator.fail_code = False
         FakeCreator.instances = []
         FakeClient.needs_password = FakeClient.bad_code = False
@@ -182,6 +186,20 @@ class OnboardingFlowTests(unittest.IsolatedAsyncioTestCase):
             await ob.submit_manual_api(s, "7654321", "b" * 32)
             self.assertEqual(s.step, "login_code")
 
+    async def test_recent_launch_failure_is_reused_without_spawning_a_new_browser(self):
+        # раньше каждый клик снова пытался запустить Chromium, даже если это уже гарантированно
+        # обречено (например, сайт работает как служба Windows без рабочего стола) — теперь
+        # недавняя причина переиспользуется без нового процесса
+        from app.services.browser_deps import record_launch_failure
+
+        record_launch_failure("Chromium не может создать своё окно — служба Windows без рабочего стола")
+        p1, p2, p3, p4, _ = _patches()
+        with p1, p2, p3, p4, SessionLocal() as db:
+            s = await self._begin(db, "m4c", "socks5://10.4.6.6:1080")
+            self.assertEqual(s.step, "manual_api")
+            self.assertIn("служба Windows", s.message)
+            self.assertEqual(FakeCreator.instances, [])          # новой попытки не было
+
     async def test_no_browser_skips_straight_to_manual_api_without_spawning_one(self):
         # Chromium не установлен/не там, где его ищет процесс (services/browser_deps.py) —
         # не тратим ресурсы на заведомо обречённую попытку запустить браузер вообще
@@ -219,6 +237,12 @@ class PanelTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.client.__exit__(None, None, None)
         app.dependency_overrides.clear()
+
+    def setUp(self):
+        from app.services.browser_deps import clear_launch_failure
+
+        clear_launch_failure()
+        self.addCleanup(clear_launch_failure)
 
     def test_pages_render(self):
         with SessionLocal() as db:

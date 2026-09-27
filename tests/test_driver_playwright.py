@@ -68,6 +68,10 @@ class BrokenBrowsersPathTests(unittest.TestCase):
         import tempfile
         from unittest.mock import patch
 
+        from app.services import browser_deps as bd
+
+        bd.clear_launch_failure()
+        self.addCleanup(bd.clear_launch_failure)
         with tempfile.TemporaryDirectory() as empty_dir, \
                 patch.dict(os.environ, {"PLAYWRIGHT_BROWSERS_PATH": empty_dir}):
             creator = mod.ApiAppCreator("+12223334455", None, "socks5://127.0.0.1:9", headless=True)
@@ -77,6 +81,8 @@ class BrokenBrowsersPathTests(unittest.TestCase):
                 self.assertIn("install_browser_deps.py", str(cm.exception))
             finally:
                 creator.close()
+        # реальный неудачный запуск (а не просто пропавший файл) запоминается на время
+        self.assertEqual(bd.recent_launch_failure(), str(cm.exception))
 
 
 @unittest.skipUnless(HAVE_PW, "playwright не установлен")
@@ -88,10 +94,17 @@ class DriverTests(unittest.TestCase):
         _Handler.created = False
         old = (mod.AUTH_URL, mod.APPS_URL)
         mod.AUTH_URL, mod.APPS_URL = base + "/auth", base + "/apps"
+        from app.services import browser_deps as bd
+
+        bd.record_launch_failure("старая ошибка от прошлой неудачной попытки")
+        self.addCleanup(bd.clear_launch_failure)
         creator = mod.ApiAppCreator("+12223334455", None, "socks5://127.0.0.1:9", headless=True)
         try:
             try:
                 self.assertEqual(creator.call("start", timeout=90), "await_web_code")
+                # успешный запуск снимает кэш прошлой неудачи — иначе следующий менеджер видел
+                # бы устаревшую причину, хотя сейчас всё работает
+                self.assertIsNone(bd.recent_launch_failure())
             except mod.CreatorError as exc:
                 if "Executable doesn't exist" in str(exc) or "playwright install" in str(exc):
                     self.skipTest("Chromium не установлен")

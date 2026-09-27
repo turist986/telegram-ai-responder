@@ -104,7 +104,7 @@ class ApiAppCreator:
         return proxy
 
     def _cmd_start(self) -> str:
-        from .browser_deps import ensure_env_set
+        from .browser_deps import clear_launch_failure, describe_launch_error, ensure_env_set, record_launch_failure
 
         ensure_env_set()
         try:
@@ -118,12 +118,10 @@ class ApiAppCreator:
         try:
             self._browser = self._pw.chromium.launch(headless=self._headless, proxy=self._proxy_for_chromium())
         except Exception as exc:
-            # Самая частая причина здесь — браузер стоит в профиле ДРУГОЙ учётной записи
-            # Windows, чем та, что сейчас запускает сайт (см. services/browser_deps.py).
-            raise CreatorError(
-                f"Не удалось запустить Chromium ({type(exc).__name__}: {exc}). Выполните на сервере: "
-                f"venv\\Scripts\\python.exe scripts\\install_browser_deps.py"
-            ) from exc
+            message = describe_launch_error(exc)
+            record_launch_failure(message)
+            raise CreatorError(message) from exc
+        clear_launch_failure()  # запуск удался — прошлая неудача (если была) больше не актуальна
         major = self._browser.version.split(".")[0]
         self._context = self._browser.new_context(
             user_agent=(f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
