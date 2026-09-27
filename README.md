@@ -81,10 +81,13 @@ scripts/
   hash_password.py        — генерация ADMIN_PASSWORD_HASH
   create_managers_template.py — генерация примера managers.xlsx
   create_session.py        — локальный интерактивный вход в Telegram → .session
+  install_tdata_deps.py    — зависимости импорта TData (opentele, без компилятора C++)
+  install_browser_deps.py  — Chromium для Playwright (мастер добавления аккаунта)
 data/
   knowledge_base.txt, prompt_template.txt — редактируются из панели
   managers.xlsx            — таблица менеджеров (загружается из панели)
   sessions/                — .session файлы (загружаются из панели)
+  ms-playwright/            — браузер Playwright (ставится install_browser_deps.py)
 deploy/
   nginx.conf                        — Linux + Nginx + certbot
   systemd/ai-responder-web.service
@@ -156,7 +159,21 @@ update.bat               — обновление Windows-сервера: git pu
 4. Аккаунт создаётся **выключенным**: включите его через 30–60 минут — свежая сессия не
    должна сразу начинать отвечать.
 
-Установка для мастера: `pip install -r requirements.txt` и `playwright install chromium`.
+Установка для мастера: `venv\Scripts\python.exe scripts\install_browser_deps.py` (ставит Chromium
+для Playwright; `start_local.bat` и `update.bat` делают это сами при необходимости). Браузер
+ставится в путь **внутри проекта** (`data\ms-playwright`), а не в профиль учётной записи Windows,
+из-под которой идёт установка — это важно: сайт в проде обычно работает как фоновая задача
+Планировщика под `NT AUTHORITY\SYSTEM` (см. «Деплой на VPS» ниже), а зависимости чаще ставят
+интерактивно под другой учётной записью; у каждой учётной записи свой профиль
+(`C:\Users\<имя>\AppData\Local`), и браузер, поставленный в один профиль, для другой попросту не
+существует — мастер падал с ошибкой при создании api_id именно поэтому. Если нужен
+конкретный путь (например, общий для нескольких проектов) — впишите в `.env`:
+`PLAYWRIGHT_BROWSERS_PATH=C:\Users\Administrator\AppData\Local\ms-playwright` (тогда убедитесь,
+что у учётной записи, под которой реально работает сайт, есть доступ к этой папке).
+Если браузер недоступен, мастер это не скрывает: страница «Добавить аккаунт» показывает
+предупреждение заранее (вместо этого работают пул api_id или ручной ввод api_id/api_hash), а
+неудачная попытка не оставляет зависший процесс браузера — раньше каждая такая попытка
+(что при сломанном пути было КАЖДОЙ попыткой) до 15 минут держала открытым процесс Chromium.
 
 **Профиль устройства** (`services/device_profile.py`): device_model / system_version /
 app_version / lang_code выбираются один раз, хранятся в БД и не меняются при рестартах;
@@ -340,7 +357,8 @@ opentele без `tgcrypto` (`--no-deps`), PyQt5 отдельно, а вмест�
 .\update.bat
 ```
 (в cmd — просто `update.bat`; на Linux — `bash deploy/update.sh`). Скрипт делает всё сам:
-`git pull` → доустанавливает зависимости (`requirements.txt`, при необходимости пакеты для TData) →
+`git pull` → доустанавливает зависимости (`requirements.txt`, при необходимости пакеты для TData и
+Chromium для мастера добавления аккаунта) →
 **перезапускает сайт и воркера** → **проверяет по адресу `/version`, что работает именно новый код**,
 и только тогда пишет `DONE` (иначе — `FAILED` и код возврата 1). Перезапуск делается в любом режиме:
 задачи Планировщика `AIResponderWeb`/`AIResponderWorker` (+ `AIResponderCaddy`, если изменился

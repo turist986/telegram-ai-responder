@@ -20,9 +20,11 @@ PROXY = "socks5://user:pw@10.1.1.1:1080"
 class FakeCreator:
     fail_start = False
     fail_code = False
+    instances: list = []
 
     def __init__(self, phone, upstream, url, headless=True):
         self.closed = False
+        FakeCreator.instances.append(self)
 
     def call(self, cmd, *args, timeout=0):
         if cmd == "start":
@@ -81,6 +83,9 @@ def _patches():
         patch.object(ob, "TelegramClient", FakeClient),
         patch.object(ob, "test_proxy", lambda p: (True, "ok")),
         patch.object(ob, "choose_ip_family", lambda proxy, dc: (False, "149.154.167.51")),
+        # реальный Chromium в этой машине может быть не установлен — тесты браузерной ветки
+        # используют FakeCreator, а не настоящий Playwright, поэтому предпроверка тут не нужна
+        patch.object(ob, "playwright_available", lambda: (True, "")),
     )
 
 
@@ -92,6 +97,7 @@ class OnboardingFlowTests(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         FakeCreator.fail_start = FakeCreator.fail_code = False
+        FakeCreator.instances = []
         FakeClient.needs_password = FakeClient.bad_code = False
         with SessionLocal() as db:
             db.query(Account).delete()
@@ -121,8 +127,8 @@ class OnboardingFlowTests(unittest.IsolatedAsyncioTestCase):
                 await self._begin(db)
 
     async def test_full_flow_creates_isolated_account(self):
-        p1, p2, p3, p4 = _patches()
-        with p1, p2, p3, p4, SessionLocal() as db:
+        p1, p2, p3, p4, p5 = _patches()
+        with p1, p2, p3, p4, p5, SessionLocal() as db:
             s = await self._begin(db)
             self.assertEqual(s.step, "web_code")
             await ob.submit_web_code(s, "12345")
@@ -144,8 +150,8 @@ class OnboardingFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(client.disconnected)
 
     async def test_two_factor_and_wrong_code(self):
-        p1, p2, p3, p4 = _patches()
-        with p1, p2, p3, p4, SessionLocal() as db:
+        p1, p2, p3, p4, p5 = _patches()
+        with p1, p2, p3, p4, p5, SessionLocal() as db:
             FakeClient.needs_password = True
             s = await self._begin(db, "m2", "socks5://10.2.2.2:1080")
             await ob.submit_web_code(s, "1")
@@ -161,19 +167,39 @@ class OnboardingFlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(s2.step, "login_code")               # можно ввести заново
 
     async def test_browser_failure_falls_back_to_manual_api(self):
-        p1, p2, p3, p4 = _patches()
-        with p1, p2, p3, p4, SessionLocal() as db:
+        p1, p2, p3, p4, p5 = _patches()
+        with p1, p2, p3, p4, p5, SessionLocal() as db:
             FakeCreator.fail_start = True
             s = await self._begin(db, "m4", "socks5://10.4.4.4:1080")
             self.assertEqual(s.step, "manual_api")
+            # регрессия: раньше браузер/драйвер не закрывался при неудачном "start" и висел
+            # (закрывался только через onboarding_ttl_seconds, до 15 минут) — теперь сразу
+            self.assertEqual(len(FakeCreator.instances), 1)
+            self.assertTrue(FakeCreator.instances[0].closed)
+            self.assertIsNone(s.creator)
             with self.assertRaises(ob.OnboardingError):
                 await ob.submit_manual_api(s, "abc", "zzz")
             await ob.submit_manual_api(s, "7654321", "b" * 32)
             self.assertEqual(s.step, "login_code")
 
+    async def test_no_browser_skips_straight_to_manual_api_without_spawning_one(self):
+        # Chromium не установлен/не там, где его ищет процесс (services/browser_deps.py) —
+        # не тратим ресурсы на заведомо обречённую попытку запустить браузер вообще
+        p1, p2, p3, p4, _ = _patches()
+        with p1, p2, p3, p4, \
+                patch.object(ob, "playwright_available", lambda: (False, "Chromium для Playwright не найден")), \
+                SessionLocal() as db:
+            s = await self._begin(db, "m4b", "socks5://10.4.5.5:1080")
+            self.assertEqual(s.step, "manual_api")
+            self.assertIn("Chromium", s.message)
+            self.assertEqual(FakeCreator.instances, [])           # ни одного экземпляра — не пытались
+            self.assertIsNone(s.creator)
+            await ob.submit_manual_api(s, "7654321", "b" * 32)
+            self.assertEqual(s.step, "login_code")
+
     async def test_cancel_removes_unfinished_session(self):
-        p1, p2, p3, p4 = _patches()
-        with p1, p2, p3, p4, SessionLocal() as db:
+        p1, p2, p3, p4, p5 = _patches()
+        with p1, p2, p3, p4, p5, SessionLocal() as db:
             s = await self._begin(db, "m5", "socks5://10.5.5.5:1080")
             await ob.submit_web_code(s, "1")
             await ob.cancel(s.token)
@@ -232,6 +258,17 @@ class PanelTests(unittest.TestCase):
             self.assertEqual(db.get(Account, acc_id).proxy, "socks5://10.7.7.7:1080")  # не удалился
         with SessionLocal() as db:
             self.assertFalse(db.query(Account).filter_by(identifier="z").count())
+
+    def test_add_page_warns_when_browser_unavailable(self):
+        with patch("app.routers.onboarding.playwright_available",
+                  lambda: (False, "Chromium для Playwright не найден по пути X")):
+            r = self.client.get("/accounts/add")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("недоступно", r.text)
+        self.assertIn("Chromium для Playwright не найден", r.text)
+        with patch("app.routers.onboarding.playwright_available", lambda: (True, "")):
+            r2 = self.client.get("/accounts/add")
+        self.assertNotIn("недоступно: Chromium", r2.text)
 
     def test_add_form_rejects_missing_proxy(self):
         r = self.client.post("/accounts/add/start", data={"identifier": "n1", "phone": "+12223334455"})

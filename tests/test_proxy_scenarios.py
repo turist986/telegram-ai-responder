@@ -49,7 +49,7 @@ class Scenario(unittest.TestCase):
     # ---- форма «Добавить аккаунт менеджера»
     def _add(self, **data):
         p = _patches()
-        with p[0], p[1], p[2], p[3]:
+        with p[0], p[1], p[2], p[3], p[4]:
             return self.client.post("/accounts/add/start", data={
                 "identifier": "Ярослав Романов", "phone": "+79301044237", **data})
 

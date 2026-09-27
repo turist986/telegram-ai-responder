@@ -31,6 +31,14 @@
     </div>
 
     <h6 class="small text-uppercase text-muted mt-3 mb-2">Приложение Telegram (api_id)</h6>
+    {% if not browser_ok %}
+    <div class="alert alert-warning py-2 small">
+      Автоматическое создание приложения через браузер сейчас недоступно: {{ browser_hint }}
+      {% if pools %} Можно выбрать существующий пул ниже{% else %} Введите api_id/api_hash
+      вручную на следующем шаге (создайте приложение на my.telegram.org с прокси этого
+      аккаунта){% endif %}.
+    </div>
+    {% endif %}
     <div class="row g-2 mb-2">
       <div class="col-12">
         <select name="pool_api_id" class="form-select form-select-sm">

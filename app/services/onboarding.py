@@ -35,6 +35,7 @@ from ..config import settings
 from ..models import Account, ApiCredential
 from . import device_profile
 from .api_app_creator import ApiAppCreator, CreatorError
+from .browser_deps import playwright_available
 from .proxy import ProxyConfigError, choose_ip_family, normalize_proxy, parse_proxy, proxy_identity, test_proxy
 from .session_lock import SessionInUseError, SessionLock
 from .settings_store import get_protection
@@ -365,11 +366,26 @@ async def begin(db: Session, identifier: str, phone: str, raw_proxy: str, manage
         return state
 
     _STATES[state.token] = state
+    # playwright_available() запускает синхронный Playwright API — внутри event loop uvicorn
+    # это прямо запрещено самим Playwright, поэтому в отдельном потоке (как test_proxy выше).
+    browser_ok, browser_hint = await asyncio.to_thread(playwright_available)
+    if not browser_ok:
+        # Chromium недоступен (не установлен или установлен для другой учётной записи Windows) —
+        # даже не пытаемся: сразу отдаём ручной ввод api_id/api_hash с понятной причиной, вместо
+        # того чтобы запускать и тут же ронять целый браузер (лишний расход ресурсов на каждую
+        # попытку — см. services/browser_deps.py).
+        state.step = "manual_api"
+        state.message = browser_hint
+        return state
     try:
         state.creator = ApiAppCreator(phone, parse_proxy(proxy), proxy, headless=settings.playwright_headless)
         await asyncio.to_thread(state.creator.call, "start", timeout=150)
     except CreatorError as exc:
-        # браузерный путь не сработал — оставляем мастер открытым: api_id/api_hash можно ввести вручную
+        # браузерный путь не сработал — оставляем мастер открытым (api_id/api_hash можно ввести
+        # вручную), но сам браузер/драйвер закрываем сразу же, а не ждём удаления состояния по
+        # тайм-ауту (onboarding_ttl_seconds) — иначе неудачные попытки копят процессы Chromium.
+        await asyncio.to_thread(state.creator.close)
+        state.creator = None
         state.step = "manual_api"
         state.message = str(exc)
         return state

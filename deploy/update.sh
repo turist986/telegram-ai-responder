@@ -34,6 +34,11 @@ if ! "$PY" -c "import importlib.util,sys;sys.exit(0 if importlib.util.find_spec(
   "$PY" scripts/install_tdata_deps.py || echo "  Импорт TData пока недоступен (остальное работает)."
 fi
 
+echo "[3b/4] Chromium для Playwright (мастер добавления аккаунта)..."
+if ! "$PY" -c "import sys;sys.path.insert(0,'.');from app.services.browser_deps import playwright_available;sys.exit(0 if playwright_available()[0] else 1)"; then
+  "$PY" scripts/install_browser_deps.py || echo "  Своё приложение через браузер пока недоступно (ручной ввод api_id/пулы работают)."
+fi
+
 if [ "$NO_RESTART" = 1 ]; then echo "[4/4] перезапуск пропущен"; exit 0; fi
 
 echo "[4/4] перезапуск..."

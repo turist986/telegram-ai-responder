@@ -58,6 +58,28 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 @unittest.skipUnless(HAVE_PW, "playwright не установлен")
+class BrokenBrowsersPathTests(unittest.TestCase):
+    """Регрессия: браузер стоит в профиле одной учётной записи Windows, процесс ищет его в
+    профиле другой (например, сайт запущен как служба под SYSTEM) — раньше это тонуло в
+    generic Playwright-ошибке; теперь CreatorError прямо называет причину и команду починки."""
+
+    def test_start_names_the_fix_when_chromium_is_missing(self):
+        import os
+        import tempfile
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as empty_dir, \
+                patch.dict(os.environ, {"PLAYWRIGHT_BROWSERS_PATH": empty_dir}):
+            creator = mod.ApiAppCreator("+12223334455", None, "socks5://127.0.0.1:9", headless=True)
+            try:
+                with self.assertRaises(mod.CreatorError) as cm:
+                    creator.call("start", timeout=60)
+                self.assertIn("install_browser_deps.py", str(cm.exception))
+            finally:
+                creator.close()
+
+
+@unittest.skipUnless(HAVE_PW, "playwright не установлен")
 class DriverTests(unittest.TestCase):
     def test_full_browser_flow_on_mock_site(self):
         srv = HTTPServer(("127.0.0.1", 0), _Handler)

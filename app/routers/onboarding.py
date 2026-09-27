@@ -9,6 +9,7 @@ from ..auth import require_login
 from ..database import get_db
 from ..services import onboarding as ob
 from ..services.api_app_creator import CreatorError
+from ..services.browser_deps import playwright_available
 from ..services.settings_store import get_protection
 from ..templating import templates
 
@@ -22,12 +23,18 @@ def _page(request: Request, state: ob.Onboarding, error: str = ""):
     )
 
 
-def _form(request: Request, db: Session, error: str = "", values: dict | None = None):
+async def _form(request: Request, db: Session, error: str = "", values: dict | None = None):
+    # playwright_available() запускает синхронный Playwright API (проверяет исполняемый файл
+    # браузера) — внутри event loop uvicorn это прямо запрещено самим Playwright ("Please use
+    # the Async API instead"), поэтому обязательно в отдельном потоке, как и остальные
+    # блокирующие вызовы в этом мастере (test_proxy, choose_ip_family).
+    browser_ok, browser_hint = await asyncio.to_thread(playwright_available)
     return templates.TemplateResponse(
         "add_account.html",
         {
             "request": request, "error": error, "v": values or {},
             "pools": ob.list_api_pools(db), "pool_limit": get_protection(db)["api_pool_max_accounts"],
+            "browser_ok": browser_ok, "browser_hint": browser_hint,
         },
     )
 
@@ -39,7 +46,7 @@ async def _get_or_redirect(token: str):
 
 @router.get("", response_class=HTMLResponse)
 async def add_form(request: Request, user: str = Depends(require_login), db: Session = Depends(get_db)):
-    return _form(request, db)
+    return await _form(request, db)
 
 
 @router.post("/start")
@@ -73,7 +80,7 @@ async def add_start(
             pool_id = int(pool_api_id.strip())
         state = await ob.begin(db, identifier, phone, raw_proxy, manager_name, lang_code, pool_api_id=pool_id)
     except (ob.OnboardingError, ProxyConfigError) as exc:
-        return _form(request, db, str(exc), values)
+        return await _form(request, db, str(exc), values)
     return RedirectResponse(f"/accounts/add/{state.token}", status_code=303)
 
 

@@ -36,6 +36,12 @@ worker.out.log
 worker.err.log
 data/worker.log
 data/worker.pid
+data/service-*.log
+data/update.log
+
+# Браузеры Playwright (мастер добавления аккаунта) — ставятся install_browser_deps.py,
+# сотни МБ, путь фиксированный внутри проекта (см. app/services/browser_deps.py)
+data/ms-playwright/
 
 # Инструментальные файлы, не относящиеся к самому проекту
 .claude/

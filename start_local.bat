@@ -55,6 +55,16 @@ if errorlevel 1 (
     if errorlevel 1 echo [!] Импорт TData пока недоступен ^(остальное работает^). Повторить: venv\Scripts\python.exe scripts\install_tdata_deps.py
 )
 
+REM Мастер добавления аккаунта (своё приложение через браузер): Chromium для Playwright
+REM ставится отдельным скриптом в путь ВНУТРИ проекта — не зависит от того, какая учётная
+REM запись Windows ставит и какая потом запускает сайт (см. services/browser_deps.py).
+venv\Scripts\python.exe -c "import sys;sys.path.insert(0,'.');from app.services.browser_deps import playwright_available;sys.exit(0 if playwright_available()[0] else 1)"
+if errorlevel 1 (
+    echo [*] Ставлю Chromium для Playwright ^(один раз, ~150 МБ^)...
+    venv\Scripts\python.exe scripts\install_browser_deps.py
+    if errorlevel 1 echo [!] Своё приложение через браузер пока недоступно ^(можно ввести api_id/api_hash вручную или выбрать пул^). Повторить: venv\Scripts\python.exe scripts\install_browser_deps.py
+)
+
 echo.
 echo [*] Запускаю сайт: веб-панель + воркер (ответы в Telegram)
 echo     Откроются ДВА окна — «AI Responder - site» и «AI Responder - worker».

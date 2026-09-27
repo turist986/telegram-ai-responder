@@ -274,6 +274,16 @@ function Update-Project {
         if ($inst.Code -ne 0) { Say "    TData import is unavailable for now (the rest works). Retry: venv\Scripts\python.exe scripts\install_tdata_deps.py" "Yellow" }
     } else { Say "    ok" }
 
+    # Add-account wizard (own app via browser): Chromium for Playwright, installed to a path
+    # INSIDE the project - independent of which Windows account installs vs which one later
+    # runs the site as a scheduled task (NT AUTHORITY\SYSTEM). See services/browser_deps.py.
+    Say "[3b/5] Playwright Chromium (add-account wizard) ..." "Cyan"
+    $hasBrowser = Invoke-Native $py @("-c", "import sys;sys.path.insert(0,'.');from app.services.browser_deps import playwright_available;sys.exit(0 if playwright_available()[0] else 1)") -Quiet
+    if ($hasBrowser.Code -ne 0) {
+        $inst2 = Invoke-Native $py @("scripts\install_browser_deps.py")
+        if ($inst2.Code -ne 0) { Say "    Own-app-via-browser is unavailable for now (manual api_id entry / pools still work). Retry: venv\Scripts\python.exe scripts\install_browser_deps.py" "Yellow" }
+    } else { Say "    ok" }
+
     if ($NoRestart) { Say "[4/5] restart skipped (-NoRestart). Restart the site yourself, then check 'version' in the left menu." "Yellow"; return }
 
     Say "[4/5] restarting site and worker ..." "Cyan"

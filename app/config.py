@@ -6,6 +6,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # рабочей директории процесса — важно для systemd/uvicorn --app-dir и т.п.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Фиксирует PLAYWRIGHT_BROWSERS_PATH ДО того, как где-либо в процессе первый раз
+# импортируется playwright — иначе браузер, поставленный одной учёткой Windows
+# (интерактивный Administrator при установке), не виден процессу под другой
+# (NT AUTHORITY\SYSTEM — так сайт обычно запущен как фоновая задача, см.
+# deploy/windows/install-services.ps1). Подробности — services/browser_deps.py.
+from .services.browser_deps import ensure_env_set  # noqa: E402
+
+ensure_env_set()
+
 
 class Settings(BaseSettings):
     # Telegram API (https://my.telegram.org)
@@ -68,6 +77,10 @@ class Settings(BaseSettings):
     # Мастер добавления аккаунта: сколько живёт незавершённая попытка и видимость браузера.
     onboarding_ttl_seconds: int = 900
     playwright_headless: bool = True
+    # Не используется напрямую (см. services/browser_deps.py — читает .env независимо от
+    # Settings), но должен быть объявлен полем: иначе Settings падает при старте, если в .env
+    # есть эта строка (по умолчанию extra="forbid" — незнакомый ключ в .env считается ошибкой).
+    playwright_browsers_path: str | None = None
     # Сколько секунд клиент может быть без связи, прежде чем воркер пересоздаст его.
     reconnect_grace_seconds: int = 180
     # Максимум времени на подключение одного аккаунта, дальше запуск считается неудачным.
