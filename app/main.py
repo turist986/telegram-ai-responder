@@ -8,7 +8,9 @@ from .auth import NotAuthenticated
 from .config import BASE_DIR
 from .database import init_db
 from .version import get_version
-from .routers import accounts, api_credentials, auth_router, dashboard, logs, onboarding, settings_router, tdata_import
+from .routers import (
+    accounts, api_credentials, auth_router, dashboard, logs, niches, onboarding, settings_router, tdata_import,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -42,3 +44,4 @@ app.include_router(tdata_import.router)  # раньше accounts: /accounts/impo
 app.include_router(accounts.router)
 app.include_router(settings_router.router)
 app.include_router(logs.router)
+app.include_router(niches.router)

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Текущие ниши{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div class="page-eyebrow">// system · niches</div>
+  <h1>Текущие ниши</h1>
+  <p>На каждый аккаунт — с какой даты и о чём боту стоит быть в курсе (например, «с 25 числа
+    льём заявки на нишу «Окна»»). Это только общий фон: реальный диалог и то, что говорит сам
+    собеседник, всегда важнее и не переопределяются этим описанием.</p>
+</div>
+
+{% if message %}<div class="alert alert-info">{{ message }}</div>{% endif %}
+
+{% for account, niches in rows %}
+<div class="card p-3 mb-3">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+    <h6 class="mb-0">{{ account.identifier }}{% if account.manager_name %} <span class="text-muted small">({{ account.manager_name }})</span>{% endif %}</h6>
+    <span class="text-muted small">{{ niches|length }} {{ "ниша" if niches|length == 1 else "ниш" }}</span>
+  </div>
+
+  {% if niches %}
+  <div class="table-responsive mb-2">
+    <table class="table table-sm align-middle mb-0">
+      <thead><tr><th style="width:120px">С даты</th><th style="width:180px">Название</th><th>Описание</th><th></th></tr></thead>
+      <tbody>
+      {% for n in niches %}
+        <tr>
+          <td class="text-nowrap">{{ n.active_from.strftime("%d.%m.%Y") }}</td>
+          <td>{{ n.title }}</td>
+          <td class="small text-muted">{{ n.description }}</td>
+          <td>
+            <form method="post" action="/niches/{{ n.id }}/delete" onsubmit="return confirm('Удалить нишу «' + {{ n.title|tojson }} + '»?');">
+              <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="section-hint mb-2">Ниш пока нет — бот отвечает без дополнительного контекста о нише заявок.</div>
+  {% endif %}
+
+  <details>
+    <summary class="small">Добавить нишу</summary>
+    <form method="post" action="/niches/{{ account.id }}/add" class="row g-2 mt-1">
+      <div class="col-md-3">
+        <input type="date" name="active_from" class="form-control form-control-sm" required
+               value="{{ '%04d-%02d-%02d'|format(now.year, now.month, now.day) }}">
+      </div>
+      <div class="col-md-3">
+        <input name="title" class="form-control form-control-sm" placeholder="Короткое название, напр. «Окна»" required maxlength="120">
+      </div>
+      <div class="col-md-4">
+        <textarea name="description" class="form-control form-control-sm" rows="1"
+                  placeholder="О чём должен быть в курсе бот: тематика, что обычно спрашивают, на что упирать в ответе" required></textarea>
+      </div>
+      <div class="col-md-2">
+        <button class="btn btn-sm btn-outline-secondary w-100">Добавить</button>
+      </div>
+    </form>
+  </details>
+</div>
+{% else %}
+<div class="section-hint">Аккаунтов пока нет — сначала добавьте аккаунт на странице «Аккаунты».</div>
+{% endfor %}
+{% endblock %}

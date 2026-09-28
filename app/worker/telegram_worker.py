@@ -28,6 +28,7 @@ from ..services.disclaimer import build_disclaimer
 from ..services.flood_guard import compute_pause, next_streak
 from ..services.knowledge_base import load_knowledge_base, load_prompt_template
 from ..services.llm_client import LLMError, generate_reply, is_llm_error_text
+from ..services.niche import event_date, get_active_niche, niche_prompt_block
 from ..services.chat_status import INBOUND, OUTBOUND_MANUAL
 from ..services.chat_status import establish_status as establish_chat_status
 from ..services.chat_status import get_status as get_chat_status
@@ -654,6 +655,15 @@ class AccountWorker:
                     kb_text = load_knowledge_base(settings.knowledge_base_path)
                     prompt_parts.append(f"### База знаний компании\n{kb_text}")
                 system_prompt = "\n\n".join(prompt_parts) or "Ты — ассистент компании."
+
+            # «Текущие ниши» (страница «Ниши»): по дате САМОГО СООБЩЕНИЯ, не «сейчас» — иначе
+            # сообщение, разобранное с опозданием (после простоя воркера, см. _catch_up_unread),
+            # получило бы контекст более новой ниши, чем была актуальна на момент его прихода.
+            # Добавляется поверх обычного промпта (и своего, и общего) — это фон про источник
+            # заявки, а не замена базы знаний; приоритет реального диалога прописан в самом тексте.
+            niche = get_active_niche(db, account.id, event_date(event))
+            if niche:
+                system_prompt = f"{system_prompt}\n\n{niche_prompt_block(niche)}"
 
             disclaimer = build_disclaimer(account)
             first_reply = (

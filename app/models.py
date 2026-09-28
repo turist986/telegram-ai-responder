@@ -1,6 +1,6 @@
 import datetime as dt
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from .database import Base
@@ -88,6 +88,32 @@ class ChatStatus(Base):
     __table_args__ = (
         UniqueConstraint("account_id", "chat_id", name="uq_chat_status_account_chat"),
     )
+
+
+class AccountNiche(Base):
+    """«Текущие ниши» — с какой даты и о чём должен быть в курсе бот на этом аккаунте.
+
+    Не подменяет реальный диалог: описание ниши — это только общий контекст, откуда пришла
+    заявка («мы пролили рекламу на нишу X с 25 числа»), а не факт про конкретного собеседника.
+    При генерации ответа (app/worker/telegram_worker.py) это описание добавляется в промпт
+    ПОСЛЕ базы знаний/промпта аккаунта, с явной оговоркой, что профиль собеседника и уже
+    состоявшийся диалог всегда важнее — см. services/niche.py.
+
+    На аккаунт может быть несколько ниш подряд (например, с 1 числа — ниша A, с 25-го сменили
+    рекламу на нишу B): применяется та, чья active_from самая поздняя из тех, что не позже даты
+    ВХОДЯЩЕГО СООБЩЕНИЯ (не «сейчас») — это и даёт «отвечать на все входящие с этой даты», в
+    том числе на сообщения, которые воркер разбирает с опозданием (после простоя, см. _catch_up)."""
+
+    __tablename__ = "account_niches"
+
+    id = Column(Integer, primary_key=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    title = Column(String(120), nullable=False)
+    description = Column(Text, nullable=False)
+    active_from = Column(Date, nullable=False)
+    created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    account = relationship("Account")
 
 
 class GlobalSetting(Base):
