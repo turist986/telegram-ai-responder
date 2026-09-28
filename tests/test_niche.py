@@ -88,6 +88,32 @@ class ServiceTests(unittest.TestCase):
             delete_niche(db, n.id)
             self.assertEqual(list_niches(db, self.acc_id), [])
 
+    def test_delete_nonexistent_id_does_not_raise(self):
+        with SessionLocal() as db:
+            delete_niche(db, 999999)  # не должно бросать
+
+    def test_add_to_nonexistent_account_is_refused_not_orphaned(self):
+        with SessionLocal() as db:
+            with self.assertRaises(NicheConfigError) as cm:
+                add_niche(db, 999999, "A", "ниша", "2026-09-25")
+        self.assertIn("не существует", str(cm.exception))
+        with SessionLocal() as db:
+            self.assertEqual(db.query(AccountNiche).filter_by(account_id=999999).count(), 0)
+
+    def test_tie_break_same_date_prefers_most_recently_added(self):
+        with SessionLocal() as db:
+            add_niche(db, self.acc_id, "Старая", "первой добавлена", "2026-09-25")
+            add_niche(db, self.acc_id, "Новая", "второй добавлена, та же дата", "2026-09-25")
+            found = get_active_niche(db, self.acc_id, dt.date(2026, 9, 25))
+        self.assertEqual(found.title, "Новая")
+
+    def test_special_characters_in_title_and_description_round_trip_intact(self):
+        tricky = "«кавычки», <script>alert(1)</script>, \"двойные\", 'одинарные', перенос\nстроки"
+        with SessionLocal() as db:
+            n = add_niche(db, self.acc_id, tricky, tricky, "2026-09-25")
+            self.assertEqual(n.title, tricky)
+            self.assertEqual(n.description, tricky)
+
     def test_niche_prompt_block_names_priority_of_real_dialog(self):
         with SessionLocal() as db:
             n = add_niche(db, self.acc_id, "Окна", "Пластиковые окна", "2026-09-25")
@@ -176,6 +202,26 @@ class RouterTests(unittest.TestCase):
         self.assertIn("удалена", self._msg(r))
         with SessionLocal() as db:
             self.assertEqual(list_niches(db, self.acc_id), [])
+
+    def test_add_to_deleted_account_shows_error_via_http(self):
+        r = self.client.post("/niches/999999/add",
+                             data={"title": "A", "description": "ниша", "active_from": "2026-09-25"})
+        self.assertIn("не существует", self._msg(r))
+
+    def test_deleting_account_removes_its_niches_too(self):
+        with SessionLocal() as db:
+            add_niche(db, self.acc_id, "A", "ниша", "2026-09-25")
+        r = self.client.post(f"/accounts/{self.acc_id}/delete")
+        self.assertEqual(r.status_code, 303)
+        with SessionLocal() as db:
+            self.assertEqual(db.query(AccountNiche).filter_by(account_id=self.acc_id).count(), 0)
+
+    def test_special_characters_render_escaped_not_executable(self):
+        with SessionLocal() as db:
+            add_niche(db, self.acc_id, "<b>жирный</b>", 'кавычки "и" «ёлочки»', "2026-09-25")
+        html = self.client.get("/niches").text
+        self.assertNotIn("<b>жирный</b>", html)          # не исполняемый HTML
+        self.assertIn("&lt;b&gt;жирный&lt;/b&gt;", html)  # а экранированный текст
 
 
 class WorkerIntegrationTests(WorkerBase):

@@ -32,6 +32,11 @@ def list_niches(db: Session, account_id: int) -> list[AccountNiche]:
 
 
 def add_niche(db: Session, account_id: int, title: str, description: str, active_from: str) -> AccountNiche:
+    # Без этой проверки форма с устаревшим account_id (аккаунт удалили в другой вкладке, пока
+    # эта страница была открыта) молча создавала бы «осиротевшую» нишу — она нигде не
+    # отображается (accounts_with_niches идёт от списка аккаунтов), но и не исчезает сама.
+    if db.get(Account, account_id) is None:
+        raise NicheConfigError("Этот аккаунт уже не существует — обновите страницу «Ниши»")
     title = title.strip()
     description = description.strip()
     if not title:
