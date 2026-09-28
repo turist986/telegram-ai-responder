@@ -32,7 +32,7 @@ from ..services.chat_status import establish_status as establish_chat_status
 from ..services.chat_status import get_status as get_chat_status
 from ..services.pacing import SessionPacer, jittered, typing_seconds
 from ..services.proxy import ProxyConfigError, choose_ip_family, parse_proxy
-from ..services.schedule import is_within_work_hours
+from ..services.schedule import is_within_work_hours, schedule_now
 from ..services.session_lock import SessionInUseError, SessionLock
 from ..services.settings_store import (
     get_llm_settings,
@@ -148,6 +148,7 @@ class AccountWorker:
         self._busy: set[str] = set()
         self._queued: dict[str, object] = {}  # chat_id -> самое свежее сообщение, пришедшее, пока чат занят
         self._logged: set[tuple[str, int]] = set()
+        self._row_ids: dict[tuple[str, int], int] = {}  # (чат, id сообщения) -> строка в dialog_messages
         self._pacer = SessionPacer()
 
     # ------------------------------------------------------------------ запуск/остановка
@@ -381,9 +382,29 @@ class AccountWorker:
             return
         self._logged.add(key)
         with SessionLocal() as db:
-            db.add(DialogMessage(account_id=self.account_id, chat_id=key[0], role="user",
-                                 content=event.raw_text or ""))
+            row = DialogMessage(account_id=self.account_id, chat_id=key[0], role="user",
+                                content=event.raw_text or "")
+            db.add(row)
             db.commit()
+            self._row_ids[key] = row.id
+
+    def _note(self, event, text: str) -> None:
+        """Записывает, что сделано с сообщением клиента (или почему ответа нет): в лог воркера и
+        в колонку «Что сделано» на странице «Логи». Раньше причины молчания нигде не
+        фиксировались — сообщение было в «Логах», а ответа не было, и не было ни строчки почему."""
+        chat_id = str(event.chat_id)
+        logger.info("Account %s: чат %s — %s", self.account_id, chat_id, text)
+        row_id = self._row_ids.get((chat_id, event.id))
+        if row_id is None:
+            return
+        try:
+            with SessionLocal() as db:
+                row = db.get(DialogMessage, row_id)
+                if row is not None:
+                    row.note = text[:300]
+                    db.commit()
+        except Exception:
+            logger.exception("Account %s: не удалось записать примечание к сообщению", self.account_id)
 
     @staticmethod
     def _age_seconds(event) -> float | None:
@@ -411,7 +432,9 @@ class AccountWorker:
         self._log_incoming(event)
 
         if self.is_paused():
-            return  # автостоп: клиент подождёт, аккаунт важнее; ответим после паузы (если не устареет)
+            # автостоп: клиент подождёт, аккаунт важнее; ответим после паузы (если не устареет)
+            self._note(event, f"без ответа: пауза автостопа до {self._paused_until:%H:%M:%S} UTC (см. «Аккаунты»)")
+            return
 
         with SessionLocal() as db:
             cfg = get_protection(db)
@@ -419,8 +442,8 @@ class AccountWorker:
             age = self._age_seconds(event)
             if age is not None and age > cfg["reply_age_minutes"] * 60:
                 self._replied_upto[chat_id] = max(event.id, self._replied_upto.get(chat_id, 0))
-                logger.info("Account %s: сообщение в чате %s старше порога (%d мин) — без ответа",
-                            self.account_id, chat_id, cfg["reply_age_minutes"])
+                self._note(event, f"без ответа: сообщению {int(age // 60)} мин — старше порога "
+                                  f"{cfg['reply_age_minutes']} мин (Настройки → Защита)")
                 return
 
         if chat_id in self._busy:
@@ -429,7 +452,7 @@ class AccountWorker:
         self._busy.add(chat_id)
         try:
             while event is not None:
-                await self._handle_one(event, chat_id)
+                await self._handle_guarded(event, chat_id)
                 event = self._queued.pop(chat_id, None)
                 if event is not None and (self.is_paused() or event.id <= self._replied_upto.get(chat_id, 0)):
                     event = None
@@ -437,11 +460,37 @@ class AccountWorker:
             self._busy.discard(chat_id)
             self._queued.pop(chat_id, None)
 
+    # Потолок на обработку ОДНОГО сообщения: задержка «подумать» (до 5 мин) + нейросеть (3 попытки
+    # по 60 с) + «печатает…» + отправка. Если что-то зависло сильнее (обрыв сети посреди запроса),
+    # чат оставался в _busy навсегда, и ВСЕ следующие сообщения этого клиента только копились в
+    # очереди без ответа до перезапуска воркера.
+    HANDLE_TIMEOUT_SECONDS = 900
+
+    async def _handle_guarded(self, event, chat_id: str):
+        """_handle_one, но так, чтобы исключение или зависание не глушили ответы молча: любая
+        ошибка попадает в лог воркера, в «Что сделано» и в колонку «Ошибка» аккаунта."""
+        try:
+            await asyncio.wait_for(self._handle_one(event, chat_id), timeout=self.HANDLE_TIMEOUT_SECONDS)
+        except asyncio.CancelledError:
+            raise
+        except asyncio.TimeoutError:
+            logger.error("Account %s: обработка сообщения в чате %s зависла (> %s с) — чат освобождён",
+                         self.account_id, chat_id, self.HANDLE_TIMEOUT_SECONDS)
+            self._note(event, f"без ответа: обработка зависла дольше {self.HANDLE_TIMEOUT_SECONDS} с (сеть/прокси?)")
+            self._record_error("Обработка сообщения зависла — проверьте прокси и соединение")
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Account %s: необработанная ошибка при обработке сообщения в чате %s",
+                             self.account_id, chat_id)
+            self._note(event, f"без ответа: внутренняя ошибка {type(exc).__name__}: {exc}")
+            self._record_error(f"Ошибка обработки сообщения: {type(exc).__name__}: {exc}")
+
     async def _handle_one(self, event, chat_id: str):
         # Прежде чем отвечать, убеждаемся, кто написал в этом чате первым (см. ниже).
         # Не удалось определить -> не отвечаем сейчас (безопаснее, чем вмешаться в
         # диалог сотрудника); статус не записан, поэтому следующая попытка повторит проверку.
         if await self._resolve_chat_status(event) is None:
+            self._note(event, "без ответа: не удалось определить, кто начал чат (ошибка запроса к Telegram) — "
+                              "повторится со следующим сообщением")
             return
         replied = await self._process(event)
         if replied:
@@ -523,9 +572,11 @@ class AccountWorker:
 
     # ------------------------------------------------------------------ генерация и отправка
     async def _process(self, event) -> bool:
+        self._log_incoming(event)  # раньше любого выхода: причине молчания нужна строка, к которой её приписать
         with SessionLocal() as db:
             account = db.get(Account, self.account_id)
             if account is None or not account.enabled or not is_global_enabled(db):
+                self._note(event, "без ответа: автоответчик выключен (тумблер аккаунта или общий)")
                 return False
 
             chat_id = str(event.chat_id)
@@ -546,14 +597,17 @@ class AccountWorker:
             if chat_status == OUTBOUND_MANUAL:
                 # Диалог начал сам сотрудник вручную — он в списке исключений,
                 # автоматические сценарии сюда не применяются.
+                self._note(event, "без ответа: чат начал сам сотрудник вручную (исключение — автоответчик "
+                                  "отвечает только там, где первым написал клиент)")
                 return False
 
             schedule = get_schedule_settings(db)
+            local_now, tz_label = schedule_now(settings.schedule_timezone)
             try:
                 work_windows = [(w["start"], w["end"]) for w in schedule["work_windows"]]
                 break_windows = [(w["start"], w["end"]) for w in schedule["break_windows"]]
                 within_hours = not schedule["work_hours_enabled"] or is_within_work_hours(
-                    dt.datetime.now(),
+                    local_now,
                     work_windows,
                     schedule["break_enabled"],
                     break_windows,
@@ -572,6 +626,9 @@ class AccountWorker:
                     # Вне рабочих часов/на перерыве и нет активного диалога, который
                     # можно было бы не обрывать — сообщение уже залогировано выше,
                     # менеджер увидит его на странице «Логи», но ИИ не отвечает.
+                    self._note(event, f"без ответа: вне рабочего времени по расписанию (сейчас "
+                                      f"{local_now:%H:%M}, {tz_label}). Если это не то время — задайте "
+                                      f"SCHEDULE_TIMEZONE в .env")
                     return
 
             history_rows = (
@@ -616,6 +673,7 @@ class AccountWorker:
         except LLMError as exc:
             logger.error("Account %s: LLM error: %s", self.account_id, exc)
             self._record_error(str(exc))
+            self._note(event, f"без ответа: {exc}")
             return
         except asyncio.CancelledError:
             gen_task.cancel()
@@ -625,6 +683,7 @@ class AccountWorker:
         if remaining > 0:
             await asyncio.sleep(remaining)
         if self.is_paused():
+            self._note(event, "без ответа: за время ожидания аккаунт ушёл на паузу автостопа")
             return False  # за время ожидания другой чат поймал флуд — не отправляем
 
         full_reply = f"{reply_text}\n\n— {disclaimer}" if show_disclaimer else reply_text
@@ -635,13 +694,16 @@ class AccountWorker:
             await event.reply(full_reply)
         except FLOOD_ERRORS as exc:
             await self._register_flood(exc, "send")
+            self._note(event, f"без ответа: Telegram ограничил отправку ({type(exc).__name__}) — автостоп")
             return False
         except RPCError as exc:
             logger.error("Account %s: send failed: %s", self.account_id, exc)
             self._on_rpc_error(exc)
+            self._note(event, f"без ответа: Telegram отклонил отправку ({type(exc).__name__})")
             return False
 
         self._pacer.touch()
+        self._note(event, "отвечено")
         with SessionLocal() as db:
             db.add(
                 DialogMessage(

@@ -57,6 +57,10 @@ class DialogMessage(Base):
     role = Column(String(16), nullable=False)  # "user" | "assistant"
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, default=dt.datetime.utcnow)
+    # Для сообщения клиента — что с ним сделал автоответчик («отвечено» или причина, почему без
+    # ответа: вне расписания, чат начат вручную, пауза, ошибка). Без этого «сообщение в логах,
+    # а ответа нет» невозможно объяснить, не читая логи сервера.
+    note = Column(String(300), nullable=True)
 
     account = relationship("Account")
 

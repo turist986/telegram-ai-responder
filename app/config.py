@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     # Мастер добавления аккаунта: сколько живёт незавершённая попытка и видимость браузера.
     onboarding_ttl_seconds: int = 900
     playwright_headless: bool = True
+    # Часовой пояс рабочих окон/перерывов (например Europe/Moscow). Пусто — время сервера,
+    # а оно у VPS обычно чужое (см. services/schedule.py::schedule_now).
+    schedule_timezone: str | None = None
     # Не используется напрямую (см. services/browser_deps.py — читает .env независимо от
     # Settings), но должен быть объявлен полем: иначе Settings падает при старте, если в .env
     # есть эта строка (по умолчанию extra="forbid" — незнакомый ключ в .env считается ошибкой).

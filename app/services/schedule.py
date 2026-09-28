@@ -1,8 +1,30 @@
 import datetime as dt
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class ScheduleConfigError(ValueError):
     pass
+
+
+def schedule_now(tz_name: str | None = None) -> tuple[dt.datetime, str]:
+    """Текущее время для проверки расписания и подпись часового пояса.
+
+    Без tz_name — время сервера. Это ловушка: VPS почти всегда в чужом поясе (у Windows-VPS
+    по умолчанию часто Pacific/UTC), а рабочие окна менеджеры задают в СВОЁМ времени — окно
+    09:00–21:00 у московского менеджера при сервере в UTC-7 «закрывалось» бы посреди дня, а
+    ответов не было. Поэтому пояс задаётся SCHEDULE_TIMEZONE в .env (например Europe/Moscow).
+    Неизвестный пояс не должен ломать ответы — предупреждаем и берём время сервера."""
+    if tz_name:
+        try:
+            from zoneinfo import ZoneInfo
+
+            return dt.datetime.now(ZoneInfo(tz_name)).replace(tzinfo=None), tz_name
+        except Exception as exc:  # noqa: BLE001 — нет tzdata / опечатка в имени пояса
+            logger.warning("SCHEDULE_TIMEZONE=%r не распознан (%s) — расписание идёт по времени сервера. "
+                           "На Windows нужен пакет tzdata: pip install tzdata", tz_name, exc)
+    return dt.datetime.now(), "время сервера"
 
 
 def parse_hhmm(value: str) -> dt.time:

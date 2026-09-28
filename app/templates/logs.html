@@ -16,7 +16,7 @@
   <div class="term-body pt-2 pb-2">
   <div class="table-responsive">
   <table class="table table-sm align-middle mb-0">
-    <thead><tr><th>Время</th><th>Аккаунт</th><th>Чат</th><th>Роль</th><th>Текст</th></tr></thead>
+    <thead><tr><th>Время (UTC)</th><th>Аккаунт</th><th>Чат</th><th>Роль</th><th>Текст</th><th>Что сделано</th></tr></thead>
     <tbody>
     {% for m in messages %}
       <tr>
@@ -25,9 +25,10 @@
         <td>{{ m.chat_id }}</td>
         <td>{% if m.role == "user" %}<span class="badge bg-secondary">Клиент</span>{% else %}<span class="badge bg-primary">ИИ</span>{% endif %}</td>
         <td>{{ m.content }}</td>
+        <td class="small">{% if m.role == "user" %}{% if m.note %}<span class="{{ 'text-success' if m.note.startswith('отвечено') else 'text-warning' }}">{{ m.note }}</span>{% else %}<span class="text-muted">—</span>{% endif %}{% endif %}</td>
       </tr>
     {% else %}
-      <tr><td colspan="5" class="text-muted">Пока нет сообщений</td></tr>
+      <tr><td colspan="6" class="text-muted">Пока нет сообщений</td></tr>
     {% endfor %}
     </tbody>
   </table>
