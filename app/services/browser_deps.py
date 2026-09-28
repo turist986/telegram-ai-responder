@@ -134,3 +134,23 @@ def playwright_available() -> tuple[bool, str]:
         return False, (f"Chromium для Playwright не найден по пути {exe}. Выполните: "
                        f"venv\\Scripts\\python.exe scripts\\install_browser_deps.py")
     return True, ""
+
+
+# Проверка выше запускает драйвер Playwright (~1 с на обычной машине, заметно дольше на
+# нагруженном VPS) — делать это при КАЖДОМ открытии страницы «Добавить аккаунт» значит тормозить
+# панель, которая и так один процесс. Страницы и мастер берут результат отсюда; скрипты установки и
+# тесты вызывают playwright_available() напрямую и всегда получают свежий ответ.
+_AVAILABILITY_TTL = 30
+_availability_cache: dict = {}
+
+
+def playwright_available_cached() -> tuple[bool, str]:
+    key = str(browsers_path())
+    hit = _availability_cache.get(key)
+    now = time.monotonic()
+    if hit and now - hit[0] < _AVAILABILITY_TTL:
+        return hit[1]
+    result = playwright_available()
+    _availability_cache.clear()
+    _availability_cache[key] = (now, result)
+    return result

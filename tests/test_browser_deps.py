@@ -77,6 +77,39 @@ class PathResolutionTests(unittest.TestCase):
             self.assertEqual(bd._env_file_value(), r"C:\quoted\path")
 
 
+class AvailabilityCacheTests(unittest.TestCase):
+    """Проверка запускает драйвер Playwright (~1 с) — на каждый показ страницы это тормозило бы
+    панель, поэтому страницы берут результат из короткого кэша."""
+
+    def setUp(self):
+        bd._availability_cache.clear()
+        self.addCleanup(bd._availability_cache.clear)
+
+    def test_second_call_within_ttl_does_not_probe_again(self):
+        calls = []
+        with patch.object(bd, "playwright_available", lambda: calls.append(1) or (True, "")):
+            self.assertEqual(bd.playwright_available_cached(), (True, ""))
+            self.assertEqual(bd.playwright_available_cached(), (True, ""))
+        self.assertEqual(len(calls), 1)
+
+    def test_expires_and_reprobes(self):
+        calls = []
+        with patch.object(bd, "playwright_available", lambda: calls.append(1) or (False, "нет")), \
+                patch.object(bd, "_AVAILABILITY_TTL", -1):
+            bd.playwright_available_cached()
+            bd.playwright_available_cached()
+        self.assertEqual(len(calls), 2)
+
+    def test_changed_browsers_path_is_not_served_from_old_cache(self):
+        calls = []
+        with patch.object(bd, "playwright_available", lambda: calls.append(1) or (True, "")):
+            with patch.object(bd, "browsers_path", lambda: Path("A")):
+                bd.playwright_available_cached()
+            with patch.object(bd, "browsers_path", lambda: Path("B")):
+                bd.playwright_available_cached()
+        self.assertEqual(len(calls), 2)
+
+
 class LaunchErrorTests(unittest.TestCase):
     """Регрессия из живого отчёта: файл Chromium на месте (playwright_available()==True), но
     реальный запуск падает — сайт работает как служба Windows (Планировщик, SYSTEM) без

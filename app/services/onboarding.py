@@ -35,7 +35,7 @@ from ..config import settings
 from ..models import Account, ApiCredential
 from . import device_profile
 from .api_app_creator import ApiAppCreator, CreatorError
-from .browser_deps import playwright_available, recent_launch_failure
+from .browser_deps import playwright_available_cached as playwright_available, recent_launch_failure
 from .proxy import ProxyConfigError, choose_ip_family, normalize_proxy, parse_proxy, proxy_identity, test_proxy
 from .session_lock import SessionInUseError, SessionLock
 from .settings_store import get_protection

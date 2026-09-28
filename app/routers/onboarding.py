@@ -9,7 +9,7 @@ from ..auth import require_login
 from ..database import get_db
 from ..services import onboarding as ob
 from ..services.api_app_creator import CreatorError
-from ..services.browser_deps import playwright_available, recent_launch_failure
+from ..services.browser_deps import playwright_available_cached as playwright_available, recent_launch_failure
 from ..services.settings_store import get_protection
 from ..templating import templates
 
