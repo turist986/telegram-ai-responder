@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import datetime as dt
 import logging
 import random
@@ -141,6 +142,9 @@ class AccountWorker:
         self.unhealthy = False
         # chat_id -> id последнего обработанного сообщения (ответили ИЛИ осознанно пропустили
         # как устаревшее): одно сообщение может прийти дважды (живое событие + догон).
+        # Дефолт -1, НЕ 0: id=0 — вырожденный, но легальный номер сообщения (например, в наших
+        # же нагрузочных тестах), а "не было ответов" не должно с ним совпадать — иначе самое
+        # первое сообщение чата с id=0 читалось бы как "уже отвечено" и вечно пропускалось.
         self._replied_upto: dict[str, int] = {}
         self.dead = False
         self.disconnected_since: float | None = None
@@ -354,7 +358,7 @@ class AccountWorker:
             if str(dialog.id) == TELEGRAM_SERVICE_ID or getattr(dialog.entity, "bot", False):
                 continue
             last_id = getattr(dialog.message, "id", 0) or 0
-            if last_id and last_id <= self._replied_upto.get(str(dialog.id), 0):
+            if last_id and last_id <= self._replied_upto.get(str(dialog.id), -1):
                 continue  # уже обработано (ответили или пропустили как устаревшее) — без лишних запросов
             unread = [
                 m async for m in self.client.iter_messages(dialog.entity, limit=dialog.unread_count)
@@ -424,7 +428,7 @@ class AccountWorker:
         sender = event.sender
         if chat_id == TELEGRAM_SERVICE_ID or (sender is not None and getattr(sender, "bot", False)):
             return
-        if event.id <= self._replied_upto.get(chat_id, 0):
+        if event.id <= self._replied_upto.get(chat_id, -1):
             return
         logger.info("Account %s: incoming message from chat %s", self.account_id, chat_id)
 
@@ -441,7 +445,7 @@ class AccountWorker:
         if cfg["reply_age_enabled"]:
             age = self._age_seconds(event)
             if age is not None and age > cfg["reply_age_minutes"] * 60:
-                self._replied_upto[chat_id] = max(event.id, self._replied_upto.get(chat_id, 0))
+                self._replied_upto[chat_id] = max(event.id, self._replied_upto.get(chat_id, -1))
                 self._note(event, f"без ответа: сообщению {int(age // 60)} мин — старше порога "
                                   f"{cfg['reply_age_minutes']} мин (Настройки → Защита)")
                 return
@@ -454,7 +458,7 @@ class AccountWorker:
             while event is not None:
                 await self._handle_guarded(event, chat_id)
                 event = self._queued.pop(chat_id, None)
-                if event is not None and (self.is_paused() or event.id <= self._replied_upto.get(chat_id, 0)):
+                if event is not None and (self.is_paused() or event.id <= self._replied_upto.get(chat_id, -1)):
                     event = None
         finally:
             self._busy.discard(chat_id)
@@ -494,7 +498,7 @@ class AccountWorker:
             return
         replied = await self._process(event)
         if replied:
-            self._replied_upto[chat_id] = max(event.id, self._replied_upto.get(chat_id, 0))
+            self._replied_upto[chat_id] = max(event.id, self._replied_upto.get(chat_id, -1))
             try:
                 await self.client.send_read_acknowledge(await event.get_input_chat())
             except FLOOD_ERRORS as exc:
@@ -743,7 +747,16 @@ class AccountWorker:
 
 class WorkerManager:
     """Периодически сверяет запущенные Telethon-клиенты с желаемым состоянием в БД
-    (тумблеры на панели, наличие .session файла, глобальный выкл/вкл)."""
+    (тумблеры на панели, наличие .session файла, глобальный выкл/вкл).
+
+    Подключение аккаунтов — отдельная очередь (_starter_loop), не сам _reconcile(): при
+    большой партии новых аккаунтов (например, только что добавили сотню) подключение с
+    анти-детект паузами между каждым (по умолчанию 3-8 с) заняло бы порядка 10 минут —
+    раньше это происходило ПРЯМО ВНУТРИ _reconcile(), и всё это время не срабатывали ни
+    тумблеры вкл/выкл, ни снятие зависших клиентов, ни смена прокси для уже запущенных
+    аккаунтов: reconcile() не мог начать следующий цикл, пока не подключится последний из
+    сотни. Теперь reconcile() только решает, кого нужно подключить, и сразу возвращается;
+    сами подключения одно за другим (с той же паузой) идут в фоне, не блокируя остальное."""
 
     def __init__(self):
         self.workers: dict[int, AccountWorker] = {}
@@ -753,15 +766,37 @@ class WorkerManager:
         # account_id -> (число подряд неудач, monotonic-время следующей попытки)
         self._retry: dict[int, tuple[int, float]] = {}
         self._stopping = False
+        self._start_queue: asyncio.Queue[int] = asyncio.Queue()
+        self._queued: set[int] = set()  # в очереди или уже подключается — чтобы не поставить дважды
+        self._starter_task: asyncio.Task | None = None
 
     async def run(self):
         logger.info("Worker manager started, reconcile interval=%ss", settings.reconcile_interval_seconds)
+        self._starter_task = asyncio.create_task(self._starter_loop())
         while not self._stopping:
             try:
                 await self._reconcile()
             except Exception:
                 logger.exception("Reconcile loop error")
             await asyncio.sleep(settings.reconcile_interval_seconds)
+
+    async def _starter_loop(self):
+        """Подключает аккаунты из очереди строго один за другим, с той же анти-детект паузой
+        между ними, что и раньше — но независимо от такта reconcile()."""
+        while not self._stopping:
+            account_id = await self._start_queue.get()
+            self._queued.discard(account_id)
+            try:
+                await self._start_one(account_id)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Account %s: unexpected error while starting", account_id)
+            finally:
+                self._start_queue.task_done()
+            await asyncio.sleep(
+                random.uniform(settings.start_stagger_min_seconds, settings.start_stagger_max_seconds)
+            )
 
     async def _reconcile(self):
         no_proxy: list[int] = []
@@ -813,65 +848,84 @@ class WorkerManager:
                 await worker.stop()
                 del self.workers[account_id]
 
-        for account_id, account in desired.items():
-            if account_id not in self.workers:
-                if self._burnt.get(account_id) == account.session_path:
-                    continue
-                if account.paused_until and account.paused_until > dt.datetime.utcnow():
-                    continue  # автостоп ещё действует — даже не подключаемся
-                fails, next_try = self._retry.get(account_id, (0, 0.0))
-                if time.monotonic() < next_try:
-                    continue
+        for account_id in desired:
+            if account_id in self.workers or account_id in self._queued:
+                continue
+            account = desired[account_id]
+            if self._burnt.get(account_id) == account.session_path:
+                continue
+            if account.paused_until and account.paused_until > dt.datetime.utcnow():
+                continue  # автостоп ещё действует — даже не подключаемся
+            fails, next_try = self._retry.get(account_id, (0, 0.0))
+            if time.monotonic() < next_try:
+                continue
+            self._queued.add(account_id)
+            self._start_queue.put_nowait(account_id)
 
-                # Режим require_proxy выключен (не рекомендуется): ограничиваем число прямых подключений.
-                if not account.proxy:
-                    direct = sum(1 for w in self.workers.values() if not w.proxy)
-                    if direct >= settings.max_direct_accounts:
-                        self._set_error_once(
-                            account_id,
-                            f"Не запущен: уже {direct} аккаунтов подключено без прокси (лимит "
-                            f"{settings.max_direct_accounts}). Укажите прокси для этого аккаунта.",
-                        )
-                        continue
+    async def _start_one(self, account_id: int):
+        """Подключение ОДНОГО аккаунта — вызывается из _starter_loop, не из _reconcile()."""
+        with SessionLocal() as db:
+            account = db.get(Account, account_id)
+        if account is None or account_id in self.workers:
+            return
+        # Перепроверяем условия «на месте»: пока аккаунт ждал своей очереди (при большой
+        # партии — до нескольких минут), его могли выключить, поставить на паузу или
+        # заменить сессию/прокси — состояние на момент постановки в очередь уже не годится.
+        if not (account.enabled and account.session_path and Path(account.session_path).exists()):
+            return
+        if settings.require_proxy and not (account.proxy or "").strip():
+            return
+        if self._burnt.get(account_id) == account.session_path:
+            return
+        if account.paused_until and account.paused_until > dt.datetime.utcnow():
+            return
+        fails, next_try = self._retry.get(account_id, (0, 0.0))
+        if time.monotonic() < next_try:
+            return
 
-                self._burnt.pop(account_id, None)
-                # «1 аккаунт = 1 воркер»: второго AccountWorker на тот же аккаунт быть не может
-                # (защита номер 1 из трёх — см. app/services/session_lock.py)
-                assert account_id not in self.workers, f"account {account_id} already has a worker"
-                worker = AccountWorker(account)
-                try:
-                    # Тайм-аут обязателен: зависший запуск одного аккаунта (например, через
-                    # нестабильный прокси) иначе блокирует весь цикл сверки — перестают
-                    # применяться тумблеры, смена прокси и запуск остальных аккаунтов.
-                    await asyncio.wait_for(worker.start(), timeout=settings.start_timeout_seconds)
-                    self.workers[account_id] = worker
-                    self._retry.pop(account_id, None)
-                except (*FATAL_ERRORS, NotAuthorizedError) as exc:
-                    self._burnt[account_id] = account.session_path
-                    worker.mark_dead(fatal_text(exc) if isinstance(exc, FATAL_ERRORS) else str(exc))
-                except FLOOD_ERRORS as exc:
-                    await worker._register_flood(exc, "start")
-                except Exception as exc:
-                    logger.exception("Account %s: failed to start", account_id)
-                    fails += 1
-                    delay = min(settings.start_retry_base_seconds * 2 ** (fails - 1), settings.start_retry_max_seconds)
-                    self._retry[account_id] = (fails, time.monotonic() + delay)
-                    text = str(exc)[:1900] or type(exc).__name__
-                    if account.proxy and isinstance(exc, (ConnectionError, TypeError, OSError, asyncio.TimeoutError)):
-                        endpoint = account.proxy.split("@")[-1]
-                        text = (f"Не удалось подключиться к Telegram через прокси {endpoint}: прокси недоступен "
-                                f"или не пропускает Telegram. Проверьте/замените прокси. Аккаунт напрямую "
-                                f"(без прокси) не подключается. [{type(exc).__name__}]")
-                    with SessionLocal() as db:
-                        acc = db.get(Account, account_id)
-                        if acc:
-                            acc.last_error = f"{text} (повтор через {int(delay)} с)"
-                            db.commit()
-
-                # Пачку аккаунтов подключаем не разом, а с паузами.
-                await asyncio.sleep(
-                    random.uniform(settings.start_stagger_min_seconds, settings.start_stagger_max_seconds)
+        # Режим require_proxy выключен (не рекомендуется): ограничиваем число прямых подключений.
+        if not account.proxy:
+            direct = sum(1 for w in self.workers.values() if not w.proxy)
+            if direct >= settings.max_direct_accounts:
+                self._set_error_once(
+                    account_id,
+                    f"Не запущен: уже {direct} аккаунтов подключено без прокси (лимит "
+                    f"{settings.max_direct_accounts}). Укажите прокси для этого аккаунта.",
                 )
+                return
+
+        self._burnt.pop(account_id, None)
+        # «1 аккаунт = 1 воркер»: второго AccountWorker на тот же аккаунт быть не может
+        # (защита номер 1 из трёх — см. app/services/session_lock.py)
+        assert account_id not in self.workers, f"account {account_id} already has a worker"
+        worker = AccountWorker(account)
+        try:
+            # Тайм-аут обязателен: зависший запуск одного аккаунта (например, через
+            # нестабильный прокси) иначе блокирует всю очередь подключения остальных.
+            await asyncio.wait_for(worker.start(), timeout=settings.start_timeout_seconds)
+            self.workers[account_id] = worker
+            self._retry.pop(account_id, None)
+        except (*FATAL_ERRORS, NotAuthorizedError) as exc:
+            self._burnt[account_id] = account.session_path
+            worker.mark_dead(fatal_text(exc) if isinstance(exc, FATAL_ERRORS) else str(exc))
+        except FLOOD_ERRORS as exc:
+            await worker._register_flood(exc, "start")
+        except Exception as exc:
+            logger.exception("Account %s: failed to start", account_id)
+            fails += 1
+            delay = min(settings.start_retry_base_seconds * 2 ** (fails - 1), settings.start_retry_max_seconds)
+            self._retry[account_id] = (fails, time.monotonic() + delay)
+            text = str(exc)[:1900] or type(exc).__name__
+            if account.proxy and isinstance(exc, (ConnectionError, TypeError, OSError, asyncio.TimeoutError)):
+                endpoint = account.proxy.split("@")[-1]
+                text = (f"Не удалось подключиться к Telegram через прокси {endpoint}: прокси недоступен "
+                        f"или не пропускает Telegram. Проверьте/замените прокси. Аккаунт напрямую "
+                        f"(без прокси) не подключается. [{type(exc).__name__}]")
+            with SessionLocal() as db:
+                acc = db.get(Account, account_id)
+                if acc:
+                    acc.last_error = f"{text} (повтор через {int(delay)} с)"
+                    db.commit()
 
     @staticmethod
     def _set_error_once(account_id: int, message: str):
@@ -883,5 +937,9 @@ class WorkerManager:
 
     async def shutdown(self):
         self._stopping = True
+        if self._starter_task is not None:
+            self._starter_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._starter_task
         for worker in self.workers.values():
             await worker.stop()

@@ -1,5 +1,7 @@
+import asyncio
 import contextlib
 import datetime as dt
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -243,6 +245,16 @@ class ReconcileTests(WorkerBase):
             with patch.object(tw, "AccountWorker", FakeWorker):
                 mgr = tw.WorkerManager()
                 await mgr._reconcile()
+                # подключение аккаунтов теперь отдельная очередь (_starter_loop), а не часть
+                # _reconcile() — раньше при сотне новых аккаунтов reconcile() не мог начать
+                # следующий такт, пока не подключится последний (~10 минут анти-детект пауз);
+                # здесь проверяем именно то, что реально решает сам _reconcile()
+                self.assertEqual(started, [])
+                with SessionLocal() as db:
+                    ok_id = db.query(Account).filter_by(identifier="ok").one().id
+                self.assertEqual(mgr._queued, {ok_id})
+                self.assertFalse(mgr._start_queue.empty())
+                await mgr._start_one(mgr._start_queue.get_nowait())
         finally:
             settings.start_stagger_min_seconds, settings.start_stagger_max_seconds = old
         self.assertEqual(started, ["ok"])
@@ -255,6 +267,97 @@ class ReconcileTests(WorkerBase):
         w._lock = MagicMock()
         with self.assertRaises(RuntimeError):
             await w._start_inner()
+
+    async def test_reconcile_returns_immediately_regardless_of_how_many_accounts_need_starting(self):
+        # регрессия: раньше _reconcile() сам подключал аккаунты одного за другим с
+        # анти-детект паузой (по умолчанию 3-8 с) — при сотне новых аккаунтов это заняло бы
+        # ~10 минут ВНУТРИ одного вызова _reconcile(), и все остальные 99 не проверялись бы,
+        # пока не подключится 1-й. Тест ставит паузу заведомо больше тайм-аута теста.
+        with SessionLocal() as db:
+            db.query(Account).delete()
+            db.commit()
+        for i in range(50):
+            acc = _account(f"scale{i}", proxy=f"socks5://10.50.{i}.1:1080")
+            open(acc.session_path, "wb").close()
+
+        old = (settings.start_stagger_min_seconds, settings.start_stagger_max_seconds)
+        settings.start_stagger_min_seconds = settings.start_stagger_max_seconds = 999
+        try:
+            mgr = tw.WorkerManager()
+            t0 = time.monotonic()
+            await asyncio.wait_for(mgr._reconcile(), timeout=2.0)
+            elapsed = time.monotonic() - t0
+        finally:
+            settings.start_stagger_min_seconds, settings.start_stagger_max_seconds = old
+        self.assertLess(elapsed, 1.0)
+        self.assertEqual(mgr._start_queue.qsize(), 50)         # все 50 поставлены в очередь
+        self.assertEqual(len(mgr.workers), 0)                  # но ни один ещё не подключён
+
+    async def test_starter_loop_keeps_the_anti_detect_stagger_between_connections(self):
+        started_at = []
+
+        class FakeWorker:
+            def __init__(self, account):
+                self.account_id = account.id
+                self.dead = self.unhealthy = False
+                self.client, self.disconnected_since = None, None
+                self.session_path, self.proxy = account.session_path, account.proxy
+                self.identity = tw.account_identity(account)
+
+            async def start(self):
+                started_at.append(time.monotonic())
+
+            async def stop(self):
+                pass
+
+        with SessionLocal() as db:
+            db.query(Account).delete()
+            db.commit()
+        ids = []
+        for i in range(3):
+            acc = _account(f"stagger{i}", proxy=f"socks5://10.60.{i}.1:1080")
+            open(acc.session_path, "wb").close()
+            ids.append(acc.id)
+
+        old = (settings.start_stagger_min_seconds, settings.start_stagger_max_seconds)
+        settings.start_stagger_min_seconds = settings.start_stagger_max_seconds = 0.1
+        try:
+            with patch.object(tw, "AccountWorker", FakeWorker):
+                mgr = tw.WorkerManager()
+                for i in ids:
+                    mgr._queued.add(i)
+                    mgr._start_queue.put_nowait(i)
+                task = asyncio.create_task(mgr._starter_loop())
+                await asyncio.sleep(0.6)
+                mgr._stopping = True
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        finally:
+            settings.start_stagger_min_seconds, settings.start_stagger_max_seconds = old
+        self.assertEqual(len(started_at), 3)
+        gaps = [b - a for a, b in zip(started_at, started_at[1:])]
+        self.assertTrue(all(g >= 0.08 for g in gaps), gaps)     # пауза между подключениями сохранилась
+
+    async def test_account_disabled_while_queued_is_not_started(self):
+        # аккаунт мог простоять в очереди минуты (при большой партии) — если за это время
+        # его выключили, реальному подключению это не должно быть видно устаревшим состоянием
+        acc, _ = self.make_worker()
+        open(acc.session_path, "wb").close()
+        mgr = tw.WorkerManager()
+        mgr._queued.add(acc.id)
+        with SessionLocal() as db:
+            db.get(Account, acc.id).enabled = False
+            db.commit()
+        await mgr._start_one(acc.id)
+        self.assertNotIn(acc.id, mgr.workers)
+
+    async def test_shutdown_stops_the_starter_task(self):
+        mgr = tw.WorkerManager()
+        mgr._starter_task = asyncio.create_task(mgr._starter_loop())
+        await asyncio.sleep(0.01)
+        await mgr.shutdown()
+        self.assertTrue(mgr._starter_task.cancelled() or mgr._starter_task.done())
 
 
 if __name__ == "__main__":

@@ -37,6 +37,8 @@ class SilenceReasonTests(WorkerBase):
         acc, w = self.make_worker()
         w.client = MagicMock()
         w.client.action = MagicMock(return_value=_Ctx())
+        w.client.get_messages = AsyncMock(return_value=[])  # чат новый -> первым написал клиент
+        w.client.send_read_acknowledge = AsyncMock(return_value=True)
         w._pacer.next_delay = MagicMock(return_value=0.0)
         return acc, w
 
@@ -94,6 +96,19 @@ class SilenceReasonTests(WorkerBase):
         with patch.object(tw, "generate_reply", AsyncMock(side_effect=LLMError(http_error_text("DeepSeek", 401)))):
             await w._process(_event())
         self.assertIn("401", _note_of(acc.id))
+
+    async def test_very_first_message_of_a_chat_with_id_zero_still_gets_a_reply(self):
+        # найдено 100-аккаунтным нагрузочным тестом: _replied_upto по умолчанию 0 на чат без
+        # истории — «ничего ещё не отвечено» неотличимо от «последний id, на который ответили,
+        # это 0», и самое первое сообщение чата с event.id == 0 молча считалось «уже отвечено»
+        # ещё в _on_message() (проверка ДО _process()) и пропускалось НАВСЕГДА (id больше не
+        # растёт назад, повторно не придёт) — нужно гнать через _on_message(), не _process()
+        # напрямую, иначе проверка, где и есть баг, вообще не вызывается
+        acc, w = self._ready()
+        with patch.object(tw, "generate_reply", AsyncMock(return_value="ответ")), \
+                patch.object(tw, "typing_seconds", return_value=0.0):
+            await w._on_message(_event(msg_id=0))
+        self.assertEqual(_note_of(acc.id), "отвечено")
 
     async def test_paused_message_says_when_it_ends(self):
         acc, w = self._ready()
