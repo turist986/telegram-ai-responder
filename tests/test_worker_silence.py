@@ -154,16 +154,25 @@ class LogsPageTests(unittest.TestCase):
             acc = Account(identifier="logs_page_acc", enabled=True)
             db.add(acc)
             db.commit()
-            db.add(DialogMessage(account_id=acc.id, chat_id="42", role="user", content="привет-логи",
+            acc_id = acc.id
+            db.add(DialogMessage(account_id=acc_id, chat_id="42", role="user", content="привет-логи",
                                  note="без ответа: вне рабочего времени по расписанию (сейчас 02:00)"))
-            db.add(DialogMessage(account_id=acc.id, chat_id="43", role="user", content="второе", note="отвечено"))
+            db.add(DialogMessage(account_id=acc_id, chat_id="43", role="user", content="второе", note="отвечено"))
             db.commit()
-        app.dependency_overrides[require_login] = lambda: "admin"
         try:
-            with TestClient(app) as client:
-                html = client.get("/logs").text
+            app.dependency_overrides[require_login] = lambda: "admin"
+            try:
+                with TestClient(app) as client:
+                    html = client.get("/logs").text
+            finally:
+                app.dependency_overrides.pop(require_login, None)
         finally:
-            app.dependency_overrides.pop(require_login, None)
+            # см. test_database_wal.py — ROWID у SQLite переиспользуется после очистки accounts,
+            # висящие DialogMessage сбивают счётчики в других тестовых файлах
+            with SessionLocal() as db:
+                db.query(DialogMessage).filter_by(account_id=acc_id).delete()
+                db.query(Account).filter_by(id=acc_id).delete()
+                db.commit()
         self.assertIn("Что сделано", html)
         self.assertIn("вне рабочего времени по расписанию", html)
         self.assertIn("text-success", html)     # «отвечено» — зелёным

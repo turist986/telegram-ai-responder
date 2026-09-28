@@ -1,21 +1,45 @@
 import logging
 from pathlib import Path
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from .config import settings
 
 logger = logging.getLogger(__name__)
 
-if settings.database_url.startswith("sqlite"):
+_IS_SQLITE = settings.database_url.startswith("sqlite")
+
+if _IS_SQLITE:
     db_file = settings.database_url.split("///")[-1]
     Path(db_file).parent.mkdir(parents=True, exist_ok=True)
 
 engine = create_engine(
     settings.database_url,
-    connect_args={"check_same_thread": False} if settings.database_url.startswith("sqlite") else {},
+    connect_args={"check_same_thread": False} if _IS_SQLITE else {},
 )
+
+if _IS_SQLITE:
+    # Веб-панель и воркер — два ОТДЕЛЬНЫХ процесса, оба постоянно ходят в один файл БД; воркер
+    # тем чаще пишет, чем больше идёт диалогов одновременно. По умолчанию SQLite (rollback
+    # journal) на время любой записи блокирует ВСЕ чтения этого файла — под реальной нагрузкой
+    # (проверено: 10 параллельных диалогов) открытие панели занимало до 250 мс и росло дальше
+    # вместе с нагрузкой, вплоть до «сайт не открывается». WAL позволяет читать, пока идёт
+    # запись (в живом тесте: те же 10 диалогов — 5-13 мс вместо 60-250 мс, запись в 3-4 раза
+    # быстрее). busy_timeout — подстраховка на случай двух записей одновременно (сама WAL
+    # такого не разруливает, но такое редко и коротко): ждать, а не сразу падать с "database
+    # is locked". synchronous=NORMAL — рекомендованная для WAL настройка, безопасна (в WAL,
+    # в отличие от rollback journal, она не рискует целостностью БД при сбое, только теряет
+    # чуть послед. долю секунды при аварийном отключении питания — от одного процесса на VPS
+    # это не то, ради чего стоит держать более медленный FULL).
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragmas(dbapi_connection, _record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA busy_timeout=30000")
+        cursor.close()
+
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 Base = declarative_base()
 
