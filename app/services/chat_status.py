@@ -12,6 +12,7 @@
   2) статус переживает перезапуск воркера/сервера: при старте мы просто читаем таблицу,
      ничего не нужно восстанавливать из памяти процесса.
 """
+import datetime as dt
 import logging
 
 from sqlalchemy.exc import IntegrityError
@@ -60,3 +61,17 @@ def establish_status(db: Session, account_id: int, chat_id: str, status: str) ->
 
 def is_blacklisted(db: Session, account_id: int, chat_id: str) -> bool:
     return get_status(db, account_id, chat_id) == OUTBOUND_MANUAL
+
+
+def get_pause_until(db: Session, account_id: int, chat_id: str) -> dt.datetime | None:
+    """Пауза «лимит сообщений в чате» (Настройки → Защита) — только для ЭТОГО чата, не для
+    всего аккаунта (в отличие от автостопа при FloodWait, см. AccountWorker._register_flood)."""
+    row = db.query(ChatStatus.paused_until).filter_by(account_id=account_id, chat_id=chat_id).first()
+    return row[0] if row else None
+
+
+def set_pause(db: Session, account_id: int, chat_id: str, until: dt.datetime) -> None:
+    """Требует, чтобы строка ChatStatus для этого чата уже существовала (см. establish_status) —
+    вызывается уже ПОСЛЕ того, как направление чата определено."""
+    db.query(ChatStatus).filter_by(account_id=account_id, chat_id=chat_id).update({"paused_until": until})
+    db.commit()

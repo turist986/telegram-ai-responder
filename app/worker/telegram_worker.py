@@ -31,7 +31,9 @@ from ..services.llm_client import LLMError, generate_reply, is_llm_error_text
 from ..services.niche import event_date, get_active_niche, niche_prompt_block
 from ..services.chat_status import INBOUND, OUTBOUND_MANUAL
 from ..services.chat_status import establish_status as establish_chat_status
+from ..services.chat_status import get_pause_until as get_chat_pause_until
 from ..services.chat_status import get_status as get_chat_status
+from ..services.chat_status import set_pause as set_chat_pause
 from ..services.pacing import SessionPacer, jittered, typing_seconds
 from ..services.proxy import ProxyConfigError, choose_ip_family, parse_proxy
 from ..services.schedule import is_within_work_hours, schedule_now
@@ -605,6 +607,33 @@ class AccountWorker:
                 self._note(event, "без ответа: чат начал сам сотрудник вручную (исключение — автоответчик "
                                   "отвечает только там, где первым написал клиент)")
                 return False
+
+            # Лимит сообщений в ОДНОМ чате (Настройки → Защита): слишком длинный диалог часто
+            # значит, что клиенту пора к живому менеджеру (или что кто-то испытывает бота на
+            # прочность) — после лимита ИИ молчит только в ЭТОМ чате, остальные диалоги
+            # аккаунта не затронуты. Счётчик начинается заново после окончания паузы.
+            dialog_cfg = get_protection(db)
+            chat_pause = get_chat_pause_until(db, account.id, chat_id)
+            if chat_pause and chat_pause > dt.datetime.utcnow():
+                self._note(event, f"без ответа: лимит сообщений в этом чате — пауза до {chat_pause:%H:%M:%S} UTC")
+                return False
+            if dialog_cfg["dialog_limit_enabled"]:
+                # Считаем только с момента, когда сработала ПРОШЛАЯ пауза (chat_pause — её
+                # значение, даже если сама пауза уже кончилась): иначе сообщения, скопившиеся
+                # за время паузы (они всё это время логируются в «Логи», просто без ответа),
+                # сразу же после её окончания снова превышали бы лимит — и пауза включалась
+                # бы заново, ни разу не дав ответить. Первый цикл (chat_pause ещё нет) — счёт
+                # с самого начала чата, как и ожидается.
+                count_q = db.query(DialogMessage).filter_by(account_id=account.id, chat_id=chat_id)
+                if chat_pause is not None:
+                    count_q = count_q.filter(DialogMessage.created_at >= chat_pause)
+                total = count_q.count()
+                if total >= dialog_cfg["dialog_message_limit"]:
+                    until = dt.datetime.utcnow() + dt.timedelta(minutes=dialog_cfg["dialog_pause_minutes"])
+                    set_chat_pause(db, account.id, chat_id, until)
+                    self._note(event, f"без ответа: достигнут лимит сообщений в чате "
+                                      f"({dialog_cfg['dialog_message_limit']}) — пауза до {until:%H:%M:%S} UTC")
+                    return False
 
             schedule = get_schedule_settings(db)
             local_now, tz_label = schedule_now(settings.schedule_timezone)

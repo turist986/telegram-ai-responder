@@ -138,13 +138,18 @@ _PROTECTION_NUMERIC = {
     "flood_reset_hours": (int, 24, 1, 720, "Сброс серии флудов через, ч"),
     "peer_flood_pause_minutes": (int, 360, 1, 10080, "Пауза при PeerFlood, мин"),
     "reply_age_minutes": (int, 30, 1, 10080, "Возрастной порог ответа, мин"),
+    # Лимит сообщений в одном чате: после стольких сообщений (в обе стороны) в этом
+    # конкретном диалоге автоответчик замолкает на dialog_pause_minutes — остальные диалоги
+    # аккаунта это не затрагивает. Счётчик по чату начинается заново после паузы.
+    "dialog_message_limit": (int, 40, 1, 2000, "Лимит сообщений в чате"),
+    "dialog_pause_minutes": (int, 720, 1, 10080, "Пауза диалога после лимита, мин"),
     # Сколько аккаунтов могут делить одно приложение (api_id/api_hash). Официальные клиенты
     # Telegram сами используют один api_id на всех пользователей — это не признак связи
     # аккаунтов; экономит только проходы через my.telegram.org при добавлении. Прокси,
     # сессия и профиль устройства при этом всё равно остаются уникальными на аккаунт.
     "api_pool_max_accounts": (int, 5, 1, 10, "Макс. аккаунтов на один api_id"),
 }
-_PROTECTION_BOOLS = {"flood_stop_enabled": True, "reply_age_enabled": True}
+_PROTECTION_BOOLS = {"flood_stop_enabled": True, "reply_age_enabled": True, "dialog_limit_enabled": False}
 _PROTECTION_CHOICES = {
     "reply_mode": ("sticky", ("sticky", "fixed")),
     "checking_preset": ("standard", ("standard", "realistic", "quiet", "custom")),

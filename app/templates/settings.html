@@ -226,6 +226,19 @@
     </div>
     <div class="section-hint mb-3">Защищает от «залпа» ответов на вчерашние сообщения после простоя или паузы. Выключите переключатель — ИИ ответит на любое непрочитанное независимо от возраста. Пропущенные сообщения остаются в «Логи».</div>
 
+    <h6 class="small text-uppercase text-muted mb-2">Лимит сообщений в одном чате</h6>
+    <div class="form-check form-switch mb-2">
+      <input class="form-check-input" type="checkbox" role="switch" id="dialog-limit-on" name="dialog_limit_enabled" {{ "checked" if prot.dialog_limit_enabled else "" }}>
+      <label class="form-check-label small" for="dialog-limit-on">Прекращать диалог после N сообщений в одном чате</label>
+    </div>
+    <div class="row g-2 mb-2">
+      <div class="col-sm-4"><label class="form-label small mb-1">Лимит сообщений в чате (в обе стороны)</label>
+        <input type="number" min="1" name="dialog_message_limit" class="form-control form-control-sm" value="{{ prot.dialog_message_limit }}"></div>
+      <div class="col-sm-4"><label class="form-label small mb-1">Пауза этого диалога после лимита, мин</label>
+        <input type="number" min="1" name="dialog_pause_minutes" class="form-control form-control-sm" value="{{ prot.dialog_pause_minutes }}"></div>
+    </div>
+    <div class="section-hint mb-3">Считаются сообщения клиента и ИИ вместе, только в ЭТОМ чате — остальные диалоги аккаунта не затрагиваются. После лимита ИИ молчит на заданную паузу (по умолчанию 720 мин = 12 ч), затем счётчик этого чата начинается заново. Сообщения клиента всё это время видны в «Логи». Полезно для необычно длинных диалогов — обычно это повод передать клиента живому менеджеру.</div>
+
     <button class="btn btn-primary btn-sm">Сохранить защиту</button>
   </form>
 </div>
