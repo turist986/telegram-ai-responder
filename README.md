@@ -516,6 +516,10 @@ stop_all.bat
 не работает; на обычной рабочей машине не используйте. Запустить заново — `start_local.bat`
 (или `Start-ScheduledTask -TaskName AIResponderWeb,AIResponderWorker`, если это служба).
 
+На боевом сервере (Windows VPS, задачи Планировщика) используйте `stop_all_vps.bat` — это тот же
+скрипт, но всегда с `-All`; подробнее и почему одного `Stop-ScheduledTask` бывает недостаточно —
+раздел «Деплой на VPS под Windows» ниже.
+
 ## Деплой на продуктовый сервер (Linux + домен + HTTPS)
 
 1. Скопируйте проект в `/opt/ai-responder`, создайте venv, установите
@@ -599,8 +603,22 @@ Get-ScheduledTask -TaskName AIResponderWeb,AIResponderWorker,AIResponderCaddy | 
    `data\service-caddy.log`. Панель — на `https://ваш-домен` (сертификат
    Caddy выпустит сам при первом запросе, обычно занимает несколько секунд).
 
-   Остановить всё: `Stop-ScheduledTask -TaskName AIResponderWeb,AIResponderWorker,AIResponderCaddy`.
-   Удалить всё: `Unregister-ScheduledTask -TaskName AIResponderWeb,AIResponderWorker,AIResponderCaddy -Confirm:$false`.
+**Полностью остановить сайт на сервере: `stop_all_vps.bat`** (в корне проекта), а не
+`Stop-ScheduledTask`. Причина: панель и воркер запущены как фоновые задачи Планировщика через
+`venv\Scripts\python.exe` — это не сам интерпретатор, а маленький загрузчик, который порождает
+ОТДЕЛЬНЫЙ процесс с настоящим Python; в некоторых случаях Планировщик не отслеживает этот
+дочерний процесс как часть задачи, и `Stop-ScheduledTask`/`Stop-ScheduledTask ... Caddy` формально
+останавливает задачу, а сам процесс воркера остаётся жить и продолжает вести диалоги в Telegram —
+именно так выглядит «сайт выключен, а бот всё равно отвечает». `stop_all_vps.bat` не полагается
+на то, как Планировщик отслеживает процессы: он останавливает задачи И ОТДЕЛЬНО находит и
+принудительно убивает все процессы `python.exe`/`pythonw.exe` на машине (флаг `-All` —
+безопасно для выделенного бот-сервера, где на Python больше ничего не работает), затем проверяет,
+что панель на `127.0.0.1:8000` действительно перестала отвечать. Запустить заново —
+`Start-ScheduledTask -TaskName AIResponderWeb,AIResponderWorker,AIResponderCaddy`.
+
+Удалить всё: `Unregister-ScheduledTask -TaskName AIResponderWeb,AIResponderWorker,AIResponderCaddy -Confirm:$false`
+(тоже стоит выполнить `stop_all_vps.bat` до или после — сама по себе удаляет только регистрацию
+задачи, не убивает уже запущенные процессы).
 
 ## Важные оговорки
 
