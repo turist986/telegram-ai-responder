@@ -13,6 +13,7 @@ from app.models import Account, AccountBlacklist, DialogMessage
 from app.services.blacklist import (
     BlacklistConfigError, accounts_with_blacklist, add_entry, delete_entry, is_blacklisted, list_blacklist,
 )
+from app.services.chat_status import establish_status, set_display_name
 from app.worker import telegram_worker as tw
 from tests.test_worker_logic import WorkerBase, _event, _save
 
@@ -129,6 +130,15 @@ class RouterTests(unittest.TestCase):
         self.assertIn("router_bl_acc", r.text)
         r2 = self.client.get("/accounts")
         self.assertIn('href="/blacklist"', r2.text)
+
+    def test_display_name_shown_next_to_chat_id(self):
+        with SessionLocal() as db:
+            establish_status(db, self.acc_id, "12345", "inbound")
+            set_display_name(db, self.acc_id, "12345", "@ivan_petrov")
+        self.client.post(f"/blacklist/{self.acc_id}/add", data={"chat_id": "12345", "note": ""})
+        page = self.client.get("/blacklist").text
+        self.assertIn("@ivan_petrov", page)
+        self.assertIn("12345", page)
 
     def test_add_then_shown_on_page(self):
         r = self.client.post(f"/blacklist/{self.acc_id}/add", data={"chat_id": "12345", "note": "спамер"})

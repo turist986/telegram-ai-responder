@@ -35,6 +35,7 @@ from ..services.chat_status import establish_status as establish_chat_status
 from ..services.chat_status import get_limit_override as get_chat_limit_override
 from ..services.chat_status import get_pause_until as get_chat_pause_until
 from ..services.chat_status import get_status as get_chat_status
+from ..services.chat_status import set_display_name as set_chat_display_name
 from ..services.chat_status import set_pause as set_chat_pause
 from ..services.pacing import SessionPacer, jittered, typing_seconds
 from ..services.proxy import ProxyConfigError, choose_ip_family, parse_proxy
@@ -99,6 +100,20 @@ def _session_dc_id(session_path: str) -> int:
         return int(row[0]) if row else 2
     except (sqlite3.Error, ValueError, TypeError):
         return 2
+
+
+def _sender_display_name(event) -> str | None:
+    """Имя собеседника из Telethon (только для отображения — см. ChatStatus.display_name):
+    @username, если есть (самый узнаваемый и стабильный вариант), иначе имя+фамилия. None, если
+    Telethon не отдал данные отправителя на этом сообщении (например, в догоне после простоя)."""
+    sender = getattr(event, "sender", None)
+    if sender is None:
+        return None
+    username = getattr(sender, "username", None)
+    if username:
+        return f"@{username}"
+    full_name = " ".join(filter(None, [getattr(sender, "first_name", None), getattr(sender, "last_name", None)]))
+    return full_name.strip() or None
 
 
 def _dialog_recently_active(db, account_id: int, chat_id: str, minutes: int) -> bool:
@@ -609,6 +624,10 @@ class AccountWorker:
             chat_status = get_chat_status(db, account.id, chat_id)
             if chat_status is None:
                 chat_status = establish_chat_status(db, account.id, chat_id, INBOUND)
+
+            # Только для отображения на страницах «Логи»/«Диалоги»/«Чёрный список» — chat_id
+            # сам по себе ничего не говорит человеку. Ни на что в логике автоответчика не влияет.
+            set_chat_display_name(db, account.id, chat_id, _sender_display_name(event))
 
             if chat_status == OUTBOUND_MANUAL:
                 # Диалог начал сам сотрудник вручную — он в списке исключений,

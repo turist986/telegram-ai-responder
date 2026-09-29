@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import require_login
 from ..database import get_db
+from ..models import ChatStatus
 from ..services.blacklist import BlacklistConfigError, accounts_with_blacklist, add_entry, delete_entry
 from ..templating import templates
 
@@ -14,11 +15,18 @@ router = APIRouter(prefix="/blacklist")
 
 @router.get("", response_class=HTMLResponse)
 async def blacklist_page(request: Request, user: str = Depends(require_login), db: Session = Depends(get_db)):
+    # Имя собеседника (см. ChatStatus.display_name) — только чтобы голый chat_id можно было
+    # опознать глазами; ни на что в логике автоответчика не влияет.
+    display_names = {
+        (s.account_id, s.chat_id): s.display_name
+        for s in db.query(ChatStatus).filter(ChatStatus.display_name.isnot(None)).all()
+    }
     return templates.TemplateResponse(
         "blacklist.html",
         {
             "request": request,
             "rows": accounts_with_blacklist(db),
+            "display_names": display_names,
             "message": request.query_params.get("msg"),
         },
     )

@@ -23,14 +23,17 @@
   <div class="table-responsive">
   <table class="table table-sm align-middle mb-0">
     <thead><tr>
-      <th>Аккаунт</th><th>Чат</th><th>Сообщений</th><th>Последнее</th><th style="min-width:190px">Статус</th>
+      <th>Аккаунт</th><th>Собеседник</th><th>Сообщений</th><th>Последнее</th><th style="min-width:190px">Статус</th>
       <th style="width:340px">Ручной лимит / пауза для этого чата</th>
     </tr></thead>
     <tbody>
     {% for row in rows %}
       <tr>
         <td class="text-nowrap">{{ row.account.identifier }}</td>
-        <td class="text-nowrap">{{ row.chat_id }}</td>
+        <td class="text-nowrap">
+          {% if row.display_name %}{{ row.display_name }} <span class="text-muted small">({{ row.chat_id }})</span>
+          {% else %}<span class="text-muted">{{ row.chat_id }}</span>{% endif %}
+        </td>
         <td>{{ row.message_count }}</td>
         <td class="text-nowrap text-muted small">{{ row.last_at.strftime("%d.%m %H:%M") }}</td>
         <td class="small" style="min-width:190px">

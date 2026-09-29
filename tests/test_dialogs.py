@@ -143,6 +143,18 @@ class RouterTests(unittest.TestCase):
         r2 = self.client.get("/accounts")
         self.assertIn('href="/dialogs"', r2.text)
 
+    def test_display_name_shown_when_known_chat_id_still_visible(self):
+        from app.services.chat_status import set_display_name
+        with SessionLocal() as db:
+            set_display_name(db, self.acc_id, "111", "@ivan_petrov")
+        page = self.client.get("/dialogs").text
+        self.assertIn("@ivan_petrov", page)
+        self.assertIn("111", page)  # chat_id тоже виден рядом, не заменяется именем полностью
+
+    def test_no_display_name_falls_back_to_bare_chat_id(self):
+        page = self.client.get("/dialogs").text
+        self.assertIn("111", page)
+
     def test_set_then_shown_on_page(self):
         r = self.client.post(f"/dialogs/{self.acc_id}/111/set", data={"message_limit": "7", "pause_minutes": "20"})
         self.assertEqual(r.status_code, 303)

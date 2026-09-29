@@ -91,6 +91,12 @@ class ChatStatus(Base):
     # включён ли общий лимит. NULL — используются общие настройки как обычно.
     message_limit_override = Column(Integer, nullable=True)
     pause_minutes_override = Column(Integer, nullable=True)
+    # Имя собеседника из Telegram (@username или имя+фамилия) — только чтобы человеку было
+    # понятно, КТО этот chat_id на страницах «Логи»/«Диалоги»/«Чёрный список»; ни на что в
+    # логике автоответчика не влияет. Обновляется на каждом входящем сообщении, если Telethon
+    # отдал данные отправителя (см. _sender_display_name в telegram_worker.py) — просто
+    # пропускаем обновление, если их нет, а не затираем уже известное имя пустотой.
+    display_name = Column(String(255), nullable=True)
 
     account = relationship("Account")
 

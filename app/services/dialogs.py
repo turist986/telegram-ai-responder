@@ -39,6 +39,10 @@ class DialogRow:
     def pause_minutes_override(self) -> int | None:
         return self.status.pause_minutes_override if self.status else None
 
+    @property
+    def display_name(self) -> str | None:
+        return self.status.display_name if self.status else None
+
 
 def list_active_dialogs(db: Session, limit: int = 100) -> list[DialogRow]:
     """Самые недавно активные диалоги (по последнему сообщению), по всем аккаунтам."""

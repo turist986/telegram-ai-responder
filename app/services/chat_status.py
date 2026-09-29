@@ -77,6 +77,18 @@ def set_pause(db: Session, account_id: int, chat_id: str, until: dt.datetime) ->
     db.commit()
 
 
+def set_display_name(db: Session, account_id: int, chat_id: str, display_name: str | None) -> None:
+    """Имя собеседника из Telegram — только для отображения на страницах «Логи»/«Диалоги»/
+    «Чёрный список», чтобы chat_id можно было опознать глазами. display_name=None (Telethon не
+    отдал данные отправителя на этом сообщении) — ничего не делаем, а не затираем уже известное
+    имя пустотой. Требует существующую строку ChatStatus (см. establish_status) — молча
+    ничего не делает, если её ещё нет (сообщение залогировано раньше, чем статус установлен)."""
+    if not display_name:
+        return
+    db.query(ChatStatus).filter_by(account_id=account_id, chat_id=chat_id).update({"display_name": display_name})
+    db.commit()
+
+
 def get_limit_override(db: Session, account_id: int, chat_id: str) -> tuple[int | None, int | None]:
     """Ручной лимит/пауза для ОДНОГО диалога (страница «Диалоги») — (лимит, пауза в минутах),
     любое из них может быть None (значит используется общая настройка). (None, None), если для
