@@ -29,6 +29,9 @@
       <a href="/niches" class="{{ 'active' if request.url.path.startswith('/niches') else '' }}">
         <i class="bi bi-signpost-2"></i> Ниши
       </a>
+      <a href="/blacklist" class="{{ 'active' if request.url.path.startswith('/blacklist') else '' }}">
+        <i class="bi bi-slash-circle"></i> Чёрный список
+      </a>
       <a href="/settings" class="{{ 'active' if request.url.path.startswith('/settings') else '' }}">
         <i class="bi bi-sliders"></i> Настройки
       </a>

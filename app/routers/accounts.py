@@ -17,7 +17,7 @@ from starlette.concurrency import run_in_threadpool
 from ..auth import require_login
 from ..config import settings
 from ..database import get_db
-from ..models import Account, AccountNiche
+from ..models import Account, AccountBlacklist, AccountNiche
 from ..services.excel_loader import sync_accounts_from_excel
 from ..services.proxy import (
     ProxyConfigError,
@@ -492,6 +492,7 @@ async def delete_account(account_id: int, user: str = Depends(require_login), db
         # Без этого удалённый аккаунт оставлял бы висящие строки в account_niches — не в базе
         # знаний, а в операционной настройке конкретного аккаунта, которая без него бессмысленна.
         db.query(AccountNiche).filter_by(account_id=account_id).delete()
+        db.query(AccountBlacklist).filter_by(account_id=account_id).delete()
         db.delete(account)
         db.commit()
     return RedirectResponse("/accounts", status_code=303)

@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Чёрный список{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div class="page-eyebrow">// system · blacklist</div>
+  <h1>Чёрный список</h1>
+  <p>На каждый аккаунт — с какими собеседниками (по chat_id) ИИ больше не должен переписываться:
+    автоответчик молчит в этом чате, пока запись не удалят вручную — навсегда, в отличие от
+    временной паузы при лимите сообщений в чате (Настройки → Защита). Сообщения от такого
+    собеседника всё равно видны в «Логи», просто без ответа. Chat_id для добавления проще всего
+    взять на странице «Логи», столбец «Чат» — там же есть кнопка «В чёрный список» у каждого
+    сообщения клиента.</p>
+</div>
+
+{% if message %}<div class="alert alert-info">{{ message }}</div>{% endif %}
+
+{% for account, entries in rows %}
+<div class="card p-3 mb-3">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+    <h6 class="mb-0">{{ account.identifier }}{% if account.manager_name %} <span class="text-muted small">({{ account.manager_name }})</span>{% endif %}</h6>
+    <span class="text-muted small">{{ entries|length }} {{ "запись" if entries|length == 1 else "записей" }}</span>
+  </div>
+
+  {% if entries %}
+  <div class="table-responsive mb-2">
+    <table class="table table-sm align-middle mb-0">
+      <thead><tr><th style="width:160px">Chat_id</th><th>Заметка</th><th style="width:140px">Добавлено</th><th></th></tr></thead>
+      <tbody>
+      {% for e in entries %}
+        <tr>
+          <td class="text-nowrap">{{ e.chat_id }}</td>
+          <td class="small text-muted">{{ e.note or "—" }}</td>
+          <td class="text-nowrap small text-muted">{{ e.created_at.strftime("%d.%m.%Y") }}</td>
+          <td>
+            <form method="post" action="/blacklist/{{ e.id }}/delete" onsubmit="return confirm('Убрать чат {{ e.chat_id }} из чёрного списка?');">
+              <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash"></i></button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="section-hint mb-2">Чёрный список пуст — автоответчик отвечает всем, кто первым написал в этот аккаунт.</div>
+  {% endif %}
+
+  <details>
+    <summary class="small">Добавить в чёрный список</summary>
+    <form method="post" action="/blacklist/{{ account.id }}/add" class="row g-2 mt-1">
+      <div class="col-md-3">
+        <input name="chat_id" class="form-control form-control-sm" placeholder="Chat_id (см. «Логи»)" required maxlength="64">
+      </div>
+      <div class="col-md-6">
+        <input name="note" class="form-control form-control-sm" placeholder="Заметка (необязательно) — почему заблокирован" maxlength="255">
+      </div>
+      <div class="col-md-3">
+        <button class="btn btn-sm btn-outline-secondary w-100">Добавить</button>
+      </div>
+    </form>
+  </details>
+</div>
+{% else %}
+<div class="section-hint">Аккаунтов пока нет — сначала добавьте аккаунт на странице «Аккаунты».</div>
+{% endfor %}
+{% endblock %}

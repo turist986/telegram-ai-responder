@@ -23,6 +23,7 @@ from telethon.errors import (
 from ..config import settings
 from ..database import SessionLocal
 from ..models import Account, DialogMessage
+from ..services.blacklist import is_blacklisted
 from ..services.device_profile import client_kwargs as profile_client_kwargs
 from ..services.disclaimer import build_disclaimer
 from ..services.flood_guard import compute_pause, next_streak
@@ -590,6 +591,13 @@ class AccountWorker:
             user_text = event.raw_text or ""
 
             self._log_incoming(event)
+
+            if is_blacklisted(db, account.id, chat_id):
+                # Чёрный список (страница «Чёрный список») — осознанное решение администратора,
+                # действует безусловно и до удаления записи вручную; проверяем раньше статуса
+                # чата, лимита сообщений и расписания — эти диалоги ИИ не должен вести вовсе.
+                self._note(event, "без ответа: этот чат в чёрном списке")
+                return False
 
             # Направление чата фиксируется по самому первому сообщению в нём. Если
             # статуса ещё нет — это первое сообщение вообще, и оно входящее -> клиент

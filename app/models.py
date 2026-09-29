@@ -119,6 +119,27 @@ class AccountNiche(Base):
     account = relationship("Account")
 
 
+class AccountBlacklist(Base):
+    """Чёрный список: конкретные собеседники (по chat_id), с которыми ЭТОТ аккаунт больше не
+    должен переписываться — автоответчик молчит в чате навсегда, пока запись не удалят вручную
+    (см. services/blacklist.py). В отличие от ChatStatus.paused_until (лимит сообщений в чате,
+    Настройки → Защита), это не временная пауза, а осознанное решение администратора."""
+
+    __tablename__ = "account_blacklist"
+
+    id = Column(Integer, primary_key=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    chat_id = Column(String(64), nullable=False)
+    note = Column(String(255), nullable=True)  # свободный текст: почему заблокировали
+    created_at = Column(DateTime, default=dt.datetime.utcnow)
+
+    account = relationship("Account")
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "chat_id", name="uq_blacklist_account_chat"),
+    )
+
+
 class GlobalSetting(Base):
     __tablename__ = "global_settings"
 
