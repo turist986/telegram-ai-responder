@@ -81,16 +81,39 @@ if ($All) {
     Say "    процессы этого проекта: $($targets.Count) (всего python-процессов на машине: $($pythonProcs.Count))"
 }
 
+$killFailures = 0
 if ($targets.Count -eq 0) {
     Say "    ни одного не найдено — похоже, уже остановлено." "Green"
 } else {
     foreach ($p in $targets) {
         $cmd = if ($p.CommandLine) { $p.CommandLine.Substring(0, [Math]::Min(110, $p.CommandLine.Length)) } else { $p.Name }
-        try {
-            & taskkill.exe /PID $p.ProcessId /T /F 2>&1 | Out-Null
+        # taskkill.exe — внешняя программа: при $ErrorActionPreference = "Stop" (выставлен
+        # выше) её stderr превращается в ТЕРМИНИРУЮЩУЮ ошибку и оборвал бы весь скрипт на
+        # первом же отказе (остальные процессы и проверка на шаге 3 не выполнились бы вовсе);
+        # временно снимаем Stop только на этот вызов и проверяем $LASTEXITCODE вручную — иначе,
+        # при отказе в доступе (типичная причина — скрипт запущен не от имени администратора,
+        # а процесс работает от NT AUTHORITY\SYSTEM, как воркер на VPS), либо скрипт молча
+        # прервался бы, либо (без этой защиты вовсе) напечатал бы «остановлен» зелёным, хотя
+        # процесс на самом деле продолжает работать.
+        $prevEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $killOutput = & taskkill.exe /PID $p.ProcessId /T /F 2>&1
+        $killExitCode = $LASTEXITCODE
+        $ErrorActionPreference = $prevEap
+        if ($killExitCode -eq 0) {
             Say "    остановлен PID $($p.ProcessId): $cmd" "Green"
-        } catch {
-            Say "    не удалось остановить PID $($p.ProcessId): $($_.Exception.Message)" "Red"
+        } elseif (-not (Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue)) {
+            # taskkill вернул ошибку («process not found»), но процесса и правда уже нет —
+            # обычно его убило дерево (/T) более раннего родителя из этого же списка
+            # (venv\python.exe — только загрузчик, у него всегда есть дочерний процесс с
+            # настоящим интерпретатором); убийство дерева асинхронное, поэтому потомок мог
+            # быть ещё жив в момент попытки и исчезнуть буквально мгновением позже. Это не
+            # отказ в доступе — не пугаем зря.
+            Say "    PID $($p.ProcessId) уже остановлен (вместе с родительским процессом): $cmd" "Green"
+        } else {
+            $killFailures++
+            Say "    НЕ УДАЛОСЬ остановить PID $($p.ProcessId) (нужны права администратора?): $cmd" "Red"
+            Say "        $killOutput" "Red"
         }
     }
 }
@@ -99,12 +122,21 @@ Say ""
 # --- 3) Проверка
 Say "[3/3] Проверяю, что панель действительно не отвечает..." "Cyan"
 Start-Sleep -Seconds 1
+$panelStillUp = $false
 try {
     Invoke-WebRequest "http://127.0.0.1:8000/login" -UseBasicParsing -TimeoutSec 3 | Out-Null
+    $panelStillUp = $true
     Say "    панель ВСЁ ЕЩЁ отвечает на 127.0.0.1:8000 — что-то не остановилось." "Red"
-    Say "    Повторите со флагом -All: .\stop_all.bat -All" "Yellow"
 } catch {
-    Say "    панель не отвечает — панель и воркер остановлены." "Green"
+    Say "    панель не отвечает — панель остановлена." "Green"
+}
+if ($killFailures -gt 0 -or $panelStillUp) {
+    if (-not $All) {
+        Say "    Повторите со флагом -All: .\stop_all.bat -All" "Yellow"
+    }
+    Say "    Если не помогло — перезапустите этот скрипт из PowerShell/cmd, запущенного" "Yellow"
+    Say "    ОТ ИМЕНИ АДМИНИСТРАТОРА: воркер на VPS работает от NT AUTHORITY\SYSTEM, и" "Yellow"
+    Say "    убить такой процесс может только elevated-сессия." "Yellow"
 }
 
 Say ""

@@ -90,6 +90,21 @@ class DialogLimitTests(WorkerBase):
         self.assertIsNotNone(paused)
         self.assertGreater(paused, dt.datetime.utcnow())
 
+    async def test_disabling_mid_pause_lifts_it_immediately(self):
+        # регрессия: пауза чата не должна действовать после того, как администратор выключил
+        # саму функцию — иначе чат молчал бы до истечения старой паузы (до 7 дней) несмотря
+        # на явное отключение в настройках.
+        acc, w, chat_id = self._ready()
+        await self._reply(w, 1, chat_id)
+        await self._reply(w, 2, chat_id)
+        self.assertFalse(await self._reply(w, 3, chat_id))  # лимит сработал, пауза действует
+
+        with SessionLocal() as db:
+            self.assertIsNotNone(get_pause_until(db, acc.id, chat_id))  # пауза всё ещё в силе
+
+        _save()  # выключаем лимит, пауза в БД остаётся как есть (никто её не чистит)
+        self.assertTrue(await self._reply(w, 4, chat_id))  # но больше не мешает отвечать
+
     async def test_disabled_by_default_has_no_limit(self):
         _save()  # без dialog_limit_enabled — выключено
         acc, w, chat_id = self._ready()

@@ -613,11 +613,14 @@ class AccountWorker:
             # прочность) — после лимита ИИ молчит только в ЭТОМ чате, остальные диалоги
             # аккаунта не затронуты. Счётчик начинается заново после окончания паузы.
             dialog_cfg = get_protection(db)
-            chat_pause = get_chat_pause_until(db, account.id, chat_id)
-            if chat_pause and chat_pause > dt.datetime.utcnow():
-                self._note(event, f"без ответа: лимит сообщений в этом чате — пауза до {chat_pause:%H:%M:%S} UTC")
-                return False
             if dialog_cfg["dialog_limit_enabled"]:
+                # Пауза учитывается, только пока настройка включена — иначе, если её выключить
+                # посреди уже действующей паузы чата, чат молчал бы до истечения старой паузы
+                # (вплоть до 7 дней) несмотря на явное отключение функции администратором.
+                chat_pause = get_chat_pause_until(db, account.id, chat_id)
+                if chat_pause and chat_pause > dt.datetime.utcnow():
+                    self._note(event, f"без ответа: лимит сообщений в этом чате — пауза до {chat_pause:%H:%M:%S} UTC")
+                    return False
                 # Считаем только с момента, когда сработала ПРОШЛАЯ пауза (chat_pause — её
                 # значение, даже если сама пауза уже кончилась): иначе сообщения, скопившиеся
                 # за время паузы (они всё это время логируются в «Логи», просто без ответа),
