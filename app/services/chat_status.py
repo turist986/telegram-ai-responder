@@ -75,3 +75,53 @@ def set_pause(db: Session, account_id: int, chat_id: str, until: dt.datetime) ->
     вызывается уже ПОСЛЕ того, как направление чата определено."""
     db.query(ChatStatus).filter_by(account_id=account_id, chat_id=chat_id).update({"paused_until": until})
     db.commit()
+
+
+def get_limit_override(db: Session, account_id: int, chat_id: str) -> tuple[int | None, int | None]:
+    """Ручной лимит/пауза для ОДНОГО диалога (страница «Диалоги») — (лимит, пауза в минутах),
+    любое из них может быть None (значит используется общая настройка). (None, None), если для
+    этого чата ручных значений вообще не задавали."""
+    row = (
+        db.query(ChatStatus.message_limit_override, ChatStatus.pause_minutes_override)
+        .filter_by(account_id=account_id, chat_id=chat_id)
+        .first()
+    )
+    return (row[0], row[1]) if row else (None, None)
+
+
+def set_limit_override(
+    db: Session, account_id: int, chat_id: str, message_limit: int | None, pause_minutes: int | None
+) -> bool:
+    """Требует существующую строку ChatStatus (см. establish_status). Обычно она уже есть —
+    страница «Диалоги» показывает чаты, где была переписка, а статус выставляется одним из
+    первых шагов её обработки (см. _process в telegram_worker.py); но аккаунт мог быть выключен
+    ДО этого шага, и тогда сообщение уже залогировано, а статуса ещё нет. Возвращает False в
+    этом редком случае — вызывающая сторона должна не выдавать ложный «сохранено»."""
+    affected = (
+        db.query(ChatStatus)
+        .filter_by(account_id=account_id, chat_id=chat_id)
+        .update({"message_limit_override": message_limit, "pause_minutes_override": pause_minutes})
+    )
+    db.commit()
+    return affected > 0
+
+
+def pause_now(db: Session, account_id: int, chat_id: str, minutes: int) -> dt.datetime | None:
+    """Немедленная ручная пауза ЭТОГО диалога на minutes минут от текущего момента —
+    страница «Диалоги», кнопка «Пауза сейчас» (не ждёт срабатывания лимита сообщений).
+
+    Заодно выставляет pause_minutes_override (если он ещё не задан) — иначе, если общий
+    лимит сообщений в «Настройки → Защита» выключен, воркер вообще не проверял бы
+    paused_until для этого чата (см. _process в telegram_worker.py) и эта пауза молча
+    ни на что не повлияла бы.
+
+    None, если для этого чата ещё нет строки ChatStatus (см. set_limit_override) — редкий
+    случай, когда сообщение уже залогировано, а статус чата ещё не установлен."""
+    if get_status(db, account_id, chat_id) is None:
+        return None
+    until = dt.datetime.utcnow() + dt.timedelta(minutes=minutes)
+    set_pause(db, account_id, chat_id, until)
+    limit_override, pause_override = get_limit_override(db, account_id, chat_id)
+    if pause_override is None:
+        set_limit_override(db, account_id, chat_id, limit_override, minutes)
+    return until

@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Диалоги{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div class="page-eyebrow">// system · dialogs</div>
+  <h1>Диалоги</h1>
+  <p>С какими собеседниками сейчас (или недавно) идёт переписка — по всем аккаунтам, самые свежие
+    сверху. Для любого диалога можно поставить свой лимит сообщений и свою паузу после него —
+    вместо общей настройки «Настройки → Защита» и независимо от того, включена ли она — или сразу
+    поставить диалог на паузу на N минут, не дожидаясь срабатывания лимита.</p>
+</div>
+
+{% if message %}<div class="alert alert-info">{{ message }}</div>{% endif %}
+
+<div class="term-window">
+  <div class="term-titlebar">
+    <span class="term-dot red"></span>
+    <span class="term-dot yellow"></span>
+    <span class="term-dot green"></span>
+    <span class="term-title">dialogs</span>
+  </div>
+  <div class="term-body pt-2 pb-2">
+  <div class="table-responsive">
+  <table class="table table-sm align-middle mb-0">
+    <thead><tr>
+      <th>Аккаунт</th><th>Чат</th><th>Сообщений</th><th>Последнее</th><th style="min-width:190px">Статус</th>
+      <th style="width:340px">Ручной лимит / пауза для этого чата</th>
+    </tr></thead>
+    <tbody>
+    {% for row in rows %}
+      <tr>
+        <td class="text-nowrap">{{ row.account.identifier }}</td>
+        <td class="text-nowrap">{{ row.chat_id }}</td>
+        <td>{{ row.message_count }}</td>
+        <td class="text-nowrap text-muted small">{{ row.last_at.strftime("%d.%m %H:%M") }}</td>
+        <td class="small" style="min-width:190px">
+          {% if row.is_paused %}
+            <span class="text-warning">пауза до {{ row.paused_until.strftime("%H:%M:%S") }} UTC</span>
+          {% else %}
+            <span class="text-success">активен</span>
+          {% endif %}
+          {% if row.message_limit_override or row.pause_minutes_override %}
+            <br><span class="text-muted">ручной: {{ row.message_limit_override or ("по умолч. " ~ default_limit) }} /
+            {{ row.pause_minutes_override or ("по умолч. " ~ default_pause) }} мин</span>
+          {% endif %}
+        </td>
+        <td>
+          <div class="d-flex flex-wrap gap-1 align-items-center">
+            <form method="post" action="/dialogs/{{ row.account.id }}/{{ row.chat_id }}/set" class="d-flex gap-1">
+              <input type="number" min="1" name="message_limit" class="form-control form-control-sm" style="width:70px"
+                     placeholder="лимит" value="{{ row.message_limit_override or '' }}">
+              <input type="number" min="1" name="pause_minutes" class="form-control form-control-sm" style="width:75px"
+                     placeholder="пауза, мин" value="{{ row.pause_minutes_override or '' }}">
+              <button class="btn btn-sm btn-outline-secondary" title="Сохранить"><i class="bi bi-check-lg"></i></button>
+            </form>
+            {% if row.message_limit_override or row.pause_minutes_override %}
+            <form method="post" action="/dialogs/{{ row.account.id }}/{{ row.chat_id }}/clear">
+              <button class="btn btn-sm btn-outline-secondary" title="Снять ручной лимит — снова общая настройка"><i class="bi bi-arrow-counterclockwise"></i></button>
+            </form>
+            {% endif %}
+            <form method="post" action="/dialogs/{{ row.account.id }}/{{ row.chat_id }}/pause" class="d-flex gap-1">
+              <input type="number" min="1" name="minutes" class="form-control form-control-sm" style="width:75px"
+                     placeholder="мин" value="{{ row.pause_minutes_override or default_pause }}">
+              <button class="btn btn-sm btn-outline-warning" title="Пауза сейчас"><i class="bi bi-pause-fill"></i></button>
+            </form>
+          </div>
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="6" class="text-muted">Диалогов пока нет</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  </div>
+</div>
+{% endblock %}

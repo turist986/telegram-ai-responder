@@ -82,9 +82,15 @@ class ChatStatus(Base):
     chat_id = Column(String(64), nullable=False)
     status = Column(String(16), nullable=False)  # "inbound" | "outbound_manual"
     created_at = Column(DateTime, default=dt.datetime.utcnow)
-    # Лимит сообщений в одном чате (Настройки → Защита): пока не пусто и не в прошлом,
-    # автоответчик молчит именно в ЭТОМ чате (остальные диалоги аккаунта не затронуты).
+    # Лимит сообщений в одном чате (Настройки → Защита, или ручное значение для ЭТОГО чата
+    # ниже): пока не пусто и не в прошлом, автоответчик молчит именно в ЭТОМ чате (остальные
+    # диалоги аккаунта не затронуты).
     paused_until = Column(DateTime, nullable=True)
+    # Ручной лимит/пауза для ОДНОГО конкретного диалога (страница «Диалоги») — если задано,
+    # действует вместо общих настроек «Настройки → Защита» для ЭТОГО чата, независимо от того,
+    # включён ли общий лимит. NULL — используются общие настройки как обычно.
+    message_limit_override = Column(Integer, nullable=True)
+    pause_minutes_override = Column(Integer, nullable=True)
 
     account = relationship("Account")
 
