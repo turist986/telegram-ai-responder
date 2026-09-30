@@ -17,7 +17,7 @@ from starlette.concurrency import run_in_threadpool
 from ..auth import require_login
 from ..config import settings
 from ..database import get_db
-from ..models import Account, AccountBlacklist, AccountNiche
+from ..models import Account
 from ..services.excel_loader import sync_accounts_from_excel
 from ..services.proxy import (
     ProxyConfigError,
@@ -30,10 +30,12 @@ from ..services.proxy import (
     split_proxy,
     test_proxy,
 )
-from ..services import worker_control
+from ..services import device_profile, worker_control
+from ..services.api_autocreate import AutoCreateError, apply_own_app, create_own_app, current_api
 from ..services.onboarding import list_api_pools, proxy_conflict_text, proxy_in_use
 from ..services.session_files import (
     bind_session as _bind_session,
+    delete_accounts,
     fresh_session_path as _fresh_session_path,
     finalize_tdata_account as _finalize_tdata_account,
 )
@@ -55,7 +57,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/accounts")
 
 
-async def _convert_tdata(proxy_str: str | None, tdir: Path, dest: Path) -> None:
+async def _convert_tdata(proxy_str: str | None, tdir: Path, dest: Path) -> dict:
     """Конвертирует одну папку TData в сессию ЧЕРЕЗ прокси аккаунта. Бросает RuntimeError
     с понятным пользователю текстом. Выполняется в потоке: CreateNewSession делает
     реальные сетевые запросы к Telegram, в event loop панели их гонять нельзя."""
@@ -68,7 +70,7 @@ async def _convert_tdata(proxy_str: str | None, tdir: Path, dest: Path) -> None:
         proxy_tuple = parse_proxy(proxy_str)
     except ProxyConfigError as exc:
         raise RuntimeError(f"некорректный прокси: {exc}") from exc
-    await run_in_threadpool(tdata_to_session, tdir, dest, proxy_tuple)
+    return await run_in_threadpool(tdata_to_session, tdir, dest, proxy_tuple)
 
 
 def _natural_key(value: str):
@@ -97,6 +99,9 @@ async def accounts_page(request: Request, user: str = Depends(require_login), db
             "now": dt.datetime.utcnow(),
             "legacy_import": settings.allow_legacy_session_import,
             "tdata_import": settings.allow_tdata_import,
+            "is_official": device_profile.is_official_desktop,
+            "describe_profile": device_profile.describe,
+            "no_profile": sum(1 for a in accounts if not a.device_model),
         },
     )
 
@@ -301,12 +306,12 @@ async def upload_tdata(
                     zf.extractall(tmp_path / "tdata")
             except zipfile.BadZipFile as exc:
                 raise RuntimeError(f"архив повреждён или это не .zip: {exc}") from exc
-            await _convert_tdata(proxy_str, tmp_path / "tdata", dest)
+            used = await _convert_tdata(proxy_str, tmp_path / "tdata", dest)
     except RuntimeError as exc:
         logger.warning("TData import failed for %s: %s", identifier, exc)
         return RedirectResponse(f"/accounts?msg={quote(f'{identifier}: {exc}')}", status_code=303)
 
-    _finalize_tdata_account(db, identifier, dest, proxy_str)
+    _finalize_tdata_account(db, identifier, dest, proxy_str, api=used)
     return RedirectResponse(
         f"/accounts?msg={quote('TData импортирована в новый отдельный сеанс. Автоответчик выключен — включите через 30–60 минут.')}",
         status_code=303,
@@ -408,12 +413,12 @@ async def upload_all(
                         acc = db.query(Account).filter_by(identifier=ident).one()
                         dest_i = _fresh_session_path(ident)
                         try:
-                            await _convert_tdata(acc.proxy, tdir, dest_i)
+                            used = await _convert_tdata(acc.proxy, tdir, dest_i)
                         except RuntimeError as exc:
                             logger.warning("TData import failed for %s: %s", ident, exc)
                             failed.append(f"{ident}: {exc}")
                             continue
-                        _finalize_tdata_account(db, ident, dest_i, acc.proxy)
+                        _finalize_tdata_account(db, ident, dest_i, acc.proxy, api=used)
                         done.append(ident)
                     if done:
                         parts.append(f"Импортировано (новые отдельные сеансы, автоответчик ВЫКЛЮЧЕН — включите через 30–60 минут): {', '.join(done)}")
@@ -426,11 +431,11 @@ async def upload_all(
                 dest = _fresh_session_path(identifier)
                 try:
                     proxy_str = _resolve_account_proxy(db, identifier, proxy)
-                    await _convert_tdata(proxy_str, tmp_path / "tdata", dest)
+                    used = await _convert_tdata(proxy_str, tmp_path / "tdata", dest)
                 except RuntimeError as exc:
                     logger.warning("TData import failed for %s: %s", identifier, exc)
                     return RedirectResponse(f"/accounts?msg={quote(f'{identifier}: {exc}')}", status_code=303)
-                _finalize_tdata_account(db, identifier, dest, proxy_str)
+                _finalize_tdata_account(db, identifier, dest, proxy_str, api=used)
             parts.append("TData импортирована в новый отдельный сеанс (автоответчик выключен — включите через 30–60 минут)")
             return RedirectResponse(f"/accounts?msg={quote('; '.join(parts))}", status_code=303)
         elif name.endswith(".session"):
@@ -477,22 +482,100 @@ async def sync_excel(
 
 @router.post("/{account_id}/delete")
 async def delete_account(account_id: int, user: str = Depends(require_login), db: Session = Depends(get_db)):
+    removed = delete_accounts(db, [account_id])
+    msg = f"Аккаунт {removed[0]} удалён" if removed else "Аккаунт не найден"
+    return RedirectResponse(f"/accounts?msg={quote(msg)}", status_code=303)
+
+
+@router.post("/delete-selected")
+async def delete_selected(request: Request, user: str = Depends(require_login), db: Session = Depends(get_db)):
+    """Массовое удаление: отмеченные галочками в таблице (или все сразу)."""
+    form = await request.form()
+    ids = [int(v) for v in form.getlist("ids") if str(v).isdigit()]
+    if not ids:
+        return RedirectResponse(f"/accounts?msg={quote('Не отмечено ни одного аккаунта')}", status_code=303)
+    removed = delete_accounts(db, ids)
+    msg = "Удалено аккаунтов: %d (%s)" % (len(removed), ", ".join(removed))
+    return RedirectResponse(f"/accounts?msg={quote(msg)}", status_code=303)
+
+
+@router.post("/{account_id}/device-profile")
+async def set_device_profile(
+    account_id: int,
+    preset: str = Form("generate"),
+    device_model: str = Form(""),
+    system_version: str = Form(""),
+    app_version: str = Form(""),
+    lang_code: str = Form(""),
+    user: str = Depends(require_login),
+    db: Session = Depends(get_db),
+):
+    """Профиль устройства: сгенерировать, «как у Telegram Desktop» (для аккаунтов, импортированных
+    из TData старой версией панели — сеанс был создан именно так) или вписать вручную."""
     account = db.get(Account, account_id)
-    if account:
-        if account.session_path and Path(account.session_path).exists():
-            try:
-                Path(account.session_path).unlink(missing_ok=True)
-            except OSError as exc:
-                # На Windows файл сессии может быть занят воркером (Telethon
-                # держит его открытым, пока клиент подключён) — удаление
-                # аккаунта не должно из-за этого падать. Воркер сам закроет
-                # клиента на ближайшей сверке (видит, что аккаунта больше
-                # нет в БД) и файл можно будет удалить вручную позже.
-                logger.warning("Account %s: could not remove session file %s: %s", account_id, account.session_path, exc)
-        # Без этого удалённый аккаунт оставлял бы висящие строки в account_niches — не в базе
-        # знаний, а в операционной настройке конкретного аккаунта, которая без него бессмысленна.
-        db.query(AccountNiche).filter_by(account_id=account_id).delete()
-        db.query(AccountBlacklist).filter_by(account_id=account_id).delete()
-        db.delete(account)
-        db.commit()
-    return RedirectResponse("/accounts", status_code=303)
+    if account is None:
+        return RedirectResponse("/accounts", status_code=303)
+    msg = _apply_profile_preset(db, account, preset, {
+        "device_model": device_model, "system_version": system_version, "app_version": app_version,
+        "lang_code": lang_code, "system_lang_code": "",
+    })
+    db.commit()
+    return RedirectResponse(f"/accounts?msg={quote(f'{account.identifier}: {msg}')}", status_code=303)
+
+
+@router.post("/device-profile/fill")
+async def fill_device_profiles(preset: str = Form("generate"), user: str = Depends(require_login),
+                               db: Session = Depends(get_db)):
+    """Всем аккаунтам без профиля устройства — одним нажатием."""
+    accounts = db.query(Account).filter(Account.device_model.is_(None)).order_by(Account.identifier).all()
+    for account in accounts:
+        _apply_profile_preset(db, account, preset, {})
+        db.flush()
+    db.commit()
+    msg = f"Профиль устройства задан: {len(accounts)}" if accounts else "У всех аккаунтов профиль уже есть"
+    return RedirectResponse(f"/accounts?msg={quote(msg)}", status_code=303)
+
+
+def _apply_profile_preset(db: Session, account: Account, preset: str, manual: dict) -> str:
+    if preset == "desktop":
+        device_profile.apply_profile(account, device_profile.DESKTOP_DEFAULT_PROFILE)
+        if not account.api_id:
+            # сеанс из TData создан под официальным Desktop — работаем тем же приложением
+            account.api_id = device_profile.OFFICIAL_DESKTOP_API_ID
+            account.api_hash = device_profile.OFFICIAL_DESKTOP_API_HASH
+        return "профиль «как у Telegram Desktop» задан"
+    if preset == "manual":
+        if not all(manual.get(k, "").strip() for k in ("device_model", "system_version", "app_version")):
+            return "для ручного профиля заполните модель, систему и версию приложения"
+        manual = {**manual, "lang_code": manual.get("lang_code", "").strip() or device_profile.DEFAULT_LANG[0]}
+        if manual["lang_code"] == device_profile.DEFAULT_LANG[0]:
+            manual["system_lang_code"] = device_profile.DEFAULT_LANG[1]
+        device_profile.apply_profile(account, manual)
+        return "профиль устройства сохранён"
+    device_profile.apply_profile(account, device_profile.generate_profile(device_profile.used_profiles(db, account.id)))
+    return f"новый профиль устройства: {device_profile.describe(account)}"
+
+
+@router.post("/{account_id}/api-autocreate")
+async def api_autocreate(account_id: int, user: str = Depends(require_login), db: Session = Depends(get_db)):
+    """Своё приложение (api_id/api_hash) для аккаунта с уже рабочей сессией: код my.telegram.org
+    читается из чата «Telegram» самой сессией — вводить ничего не нужно."""
+    account = db.get(Account, account_id)
+    if account is None:
+        return RedirectResponse("/accounts", status_code=303)
+    ident = account.identifier
+    if not account.session_path or not Path(account.session_path).exists():
+        return RedirectResponse(f"/accounts?msg={quote(f'{ident}: нет файла сессии')}", status_code=303)
+    if account.enabled and worker_control.is_running():
+        return RedirectResponse(
+            f"/accounts?msg={quote(f'{ident}: сначала выключите автоответчик у аккаунта (сессию держит воркер), подождите ~10 с и повторите')}",
+            status_code=303)
+    try:
+        creds = await create_own_app(account.session_path, account.proxy or "", current_api(account))
+    except AutoCreateError as exc:
+        return RedirectResponse(f"/accounts?msg={quote(f'{ident}: приложение не создано — {exc}')}", status_code=303)
+    account = db.get(Account, account_id)
+    apply_own_app(db, account, creds)
+    msg = "%s: создано своё приложение api_id %s, профиль устройства: %s" % (
+        ident, creds["api_id"], device_profile.describe(account))
+    return RedirectResponse(f"/accounts?msg={quote(msg)}", status_code=303)

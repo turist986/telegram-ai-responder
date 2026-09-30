@@ -25,6 +25,7 @@ from ..database import SessionLocal
 from ..models import Account, DialogMessage
 from ..services.blacklist import is_blacklisted
 from ..services.device_profile import client_kwargs as profile_client_kwargs
+from ..services.device_profile import OFFICIAL_DESKTOP_LANG_PACK, is_official_desktop
 from ..services.disclaimer import build_disclaimer
 from ..services.flood_guard import compute_pause, next_streak
 from ..services.knowledge_base import load_knowledge_base, load_prompt_template
@@ -219,6 +220,9 @@ class AccountWorker:
             base_logger=logging.getLogger(f"tg.acc{self.account_id}"),  # в логе видно, чей это сокет
             **self._client_kwargs,
         )
+        if is_official_desktop(self._api_id):
+            # сеанс из TData создан официальным Telegram Desktop — представляемся так же, как при входе
+            self.client._init_request.lang_pack = OFFICIAL_DESKTOP_LANG_PACK
         if use_ipv6:
             self.client.session.set_dc(self.client.session.dc_id, dc_address, 443)
             logger.info("Account %s: proxy is IPv6-only, connecting to DC%s via IPv6",

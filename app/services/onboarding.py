@@ -131,6 +131,8 @@ def list_api_pools(db: Session) -> list[dict]:
     аккаунта всегда свой."""
     groups: dict[int, dict] = {}
     for acc in db.query(Account).filter(Account.api_id.isnot(None), Account.api_hash.isnot(None)).all():
+        if device_profile.is_official_desktop(acc.api_id):
+            continue  # официальный Telegram Desktop (импорт TData) — не «пул», место в нём не выдаётся
         g = groups.setdefault(acc.api_id, {"api_id": acc.api_id, "api_hash": acc.api_hash, "label": None, "members": []})
         g["members"].append(acc.identifier)
     for cred in db.query(ApiCredential).all():
@@ -243,8 +245,16 @@ def assign_api_to_account(db: Session, account_id: int, api_id: int) -> None:
     if account is None:
         raise OnboardingError("Аккаунт не найден")
     api_hash = validate_pool_choice(db, api_id, exclude_identifier=account.identifier)
-    account.api_id, account.api_hash = api_id, api_hash
+    _switch_api(db, account, api_id, api_hash)
     db.commit()
+
+
+def _switch_api(db: Session, account: Account, api_id: int, api_hash: str) -> None:
+    """Своё приложение не должно выдавать себя за Telegram Desktop: при уходе с официального
+    api_id (или если профиля не было вовсе) аккаунт получает свой профиль устройства."""
+    if not account.device_model or device_profile.is_official_desktop(account.api_id):
+        device_profile.apply_profile(account, device_profile.generate_profile(device_profile.used_profiles(db, account.id)))
+    account.api_id, account.api_hash = api_id, api_hash
 
 
 def auto_distribute(db: Session) -> dict:
@@ -256,7 +266,9 @@ def auto_distribute(db: Session) -> dict:
     были: на общем api_id, автоответчик по-прежнему может их обслуживать."""
     limit = get_protection(db)["api_pool_max_accounts"]
     queue = [dict(p) for p in list_api_pools(db) if p["count"] < limit]
-    free_accounts = db.query(Account).filter(Account.api_id.is_(None)).order_by(Account.identifier).all()
+    free_accounts = (db.query(Account)
+                     .filter((Account.api_id.is_(None)) | (Account.api_id == device_profile.OFFICIAL_DESKTOP_API_ID))
+                     .order_by(Account.identifier).all())
 
     assigned: list[tuple[str, int]] = []
     unassigned: list[str] = []
@@ -267,7 +279,8 @@ def auto_distribute(db: Session) -> dict:
             unassigned.append(account.identifier)
             continue
         pool = candidates[qi % len(candidates)]
-        account.api_id, account.api_hash = pool["api_id"], pool["api_hash"]
+        _switch_api(db, account, pool["api_id"], pool["api_hash"])
+        db.flush()
         pool["count"] += 1
         assigned.append((account.identifier, pool["api_id"]))
         qi += 1

@@ -75,3 +75,43 @@ def client_kwargs(account) -> dict:
         kw["lang_code"] = account.lang_code
         kw["system_lang_code"] = account.system_lang_code or account.lang_code
     return kw
+
+
+# Официальное приложение Telegram Desktop. Под ним opentele создаёт новый сеанс при импорте
+# TData (CreateNewSession) — если своего приложения у аккаунта нет, воркер обязан работать
+# с ТЕМИ ЖЕ api_id и устройством, иначе «логин» и «работа» выглядят как разные клиенты.
+OFFICIAL_DESKTOP_API_ID = 2040
+OFFICIAL_DESKTOP_API_HASH = "b18441a1ff607e10a989891a5462e627"
+OFFICIAL_DESKTOP_LANG_PACK = "tdesktop"
+# Что opentele подставлял по умолчанию (API.TelegramDesktop) в старых версиях панели — для
+# аккаунтов, импортированных из TData до того, как профиль начал сохраняться в БД.
+DESKTOP_DEFAULT_PROFILE = {
+    "device_model": "Desktop", "system_version": "Windows 10", "app_version": "3.4.3 x64",
+    "lang_code": "en", "system_lang_code": "en-US",
+}
+PROFILE_FIELDS = ("device_model", "system_version", "app_version", "lang_code", "system_lang_code")
+
+
+def is_official_desktop(api_id) -> bool:
+    return api_id == OFFICIAL_DESKTOP_API_ID
+
+
+def used_profiles(db, exclude_id: int | None = None) -> set[tuple]:
+    from ..models import Account  # локально: models импортирует database, а тот — config
+    q = db.query(Account.device_model, Account.system_version, Account.app_version).filter(Account.device_model.isnot(None))
+    if exclude_id is not None:
+        q = q.filter(Account.id != exclude_id)
+    return {tuple(row) for row in q.all()}
+
+
+def apply_profile(account, profile: dict) -> None:
+    for key in PROFILE_FIELDS:
+        setattr(account, key, (profile.get(key) or "").strip()[:64] or None)
+    if account.lang_code and not account.system_lang_code:
+        account.system_lang_code = account.lang_code
+
+
+def describe(account) -> str:
+    if not account.device_model:
+        return ""
+    return f"{account.device_model} · {account.system_version or '?'} · {account.app_version or '?'}"

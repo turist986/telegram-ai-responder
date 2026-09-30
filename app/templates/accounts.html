@@ -132,16 +132,42 @@
   </div>
 </div>
 
+{% if no_profile %}
+<div class="card p-3 mb-3 border-warning">
+  <strong>У {{ no_profile }} аккаунт(ов) нет профиля устройства</strong>
+  <div class="section-hint mb-2">
+    Без профиля воркер подключается «устройством по умолчанию», которое не совпадает с тем, под которым создан сеанс.
+    Аккаунтам, импортированным из TData прежней версией панели, выберите «как у Telegram Desktop» — именно так был создан их сеанс
+    (им заодно назначится официальный api_id Desktop, если своего нет). Остальным — «сгенерировать».
+  </div>
+  <form method="post" action="/accounts/device-profile/fill" class="d-flex gap-2 flex-wrap">
+    <select name="preset" class="form-select form-select-sm" style="max-width:340px">
+      <option value="desktop">как у Telegram Desktop (импорт TData)</option>
+      <option value="generate">сгенерировать свой профиль</option>
+    </select>
+    <button class="btn btn-sm btn-warning">Задать всем без профиля</button>
+  </form>
+</div>
+{% endif %}
+
 <div class="card p-3">
-  <h6 class="mb-3">Список аккаунтов</h6>
+  <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+    <h6 class="mb-0">Список аккаунтов</h6>
+    <form method="post" action="/accounts/delete-selected" id="bulk-delete" class="d-flex gap-2 align-items-center"
+          onsubmit="var n=document.querySelectorAll('.acc-check:checked').length; if(!n){alert('Отметьте аккаунты галочками');return false;} return confirm('Удалить отмеченные аккаунты ('+n+')? Сессии, история диалогов и настройки этих аккаунтов будут удалены безвозвратно.');">
+      <span class="small text-muted" id="sel-count"></span>
+      <button class="btn btn-sm btn-outline-danger"><i class="bi bi-trash3"></i> Удалить выбранные</button>
+    </form>
+  </div>
   <div class="table-responsive">
   <table class="table align-middle mb-0">
     <thead>
-      <tr><th>Идентификатор</th><th>Менеджер</th><th>Дисклеймер</th><th>Пометка «ИИ» в каждом ответе</th><th>Промпт</th><th>Статус (Excel)</th><th>Прокси</th><th>Сессия</th><th>Автоответчик</th><th>Ошибка</th><th></th></tr>
+      <tr><th><input type="checkbox" class="form-check-input" id="check-all" title="Выбрать все"></th><th>Идентификатор</th><th>Менеджер</th><th>Дисклеймер</th><th>Пометка «ИИ» в каждом ответе</th><th>Промпт</th><th>Статус (Excel)</th><th>Прокси</th><th>Сессия</th><th>Автоответчик</th><th>Ошибка</th><th></th></tr>
     </thead>
     <tbody>
     {% for a in accounts %}
       <tr>
+        <td><input type="checkbox" class="form-check-input acc-check" name="ids" value="{{ a.id }}" form="bulk-delete"></td>
         <td>{{ a.identifier }}{% if a.phone %}<div class="small text-muted">{{ a.phone }}</div>{% endif %}</td>
         <td>{{ a.manager_name or "—" }}</td>
         <td style="max-width:220px" class="text-truncate">{{ a.disclaimer_marker or "по умолчанию" }}</td>
@@ -194,7 +220,9 @@
         </td>
         <td>
           {% if a.session_path %}<span class="badge bg-success">есть</span>{% else %}<span class="badge bg-danger">нет</span>{% endif %}
-          {% if a.api_id %}
+          {% if a.api_id and is_official(a.api_id) %}
+            <div class="small text-muted" title="Сеанс создан как официальный Telegram Desktop (импорт TData)">API Telegram Desktop</div>
+          {% elif a.api_id %}
             {% set n = pool_counts.get(a.api_id, 1) %}
             {% if n > 1 %}<div class="small text-muted" title="api_id {{ a.api_id }}, в пуле {{ n }} аккаунтов">api_id: пул из {{ n }}</div>
             {% else %}<div class="small text-muted" title="Собственное приложение аккаунта, api_id {{ a.api_id }}">свой api_id</div>{% endif %}
@@ -215,7 +243,33 @@
               {% if not api_pools %}<div class="small text-muted mt-1">Нет доступных приложений — загрузите выше или добавьте аккаунт через мастер</div>{% endif %}
             </details>
           {% endif %}
-          {% if not a.device_model %}<div class="small text-warning" title="Профиль устройства не задан (Telethon по умолчанию)">нет профиля устройства</div>{% endif %}
+          {% if a.session_path and (not a.api_id or is_official(a.api_id)) %}
+            <form method="post" action="/accounts/{{ a.id }}/api-autocreate" class="mt-1"
+                  onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='создаём… (до 2–3 мин)';">
+              <button class="btn btn-sm btn-outline-primary py-0" title="Сессия сама получит код my.telegram.org и создаст своё приложение через прокси аккаунта">
+                <i class="bi bi-magic"></i> создать свой api_id
+              </button>
+            </form>
+          {% endif %}
+          <details class="mt-1">
+            {% if a.device_model %}
+              <summary class="small text-muted" title="Профиль устройства">{{ describe_profile(a) }}</summary>
+            {% else %}
+              <summary class="small text-warning" title="Профиль устройства не задан (Telethon по умолчанию)">нет профиля устройства (задать)</summary>
+            {% endif %}
+            <form method="post" action="/accounts/{{ a.id }}/device-profile" class="mt-1" style="min-width:220px">
+              <select name="preset" class="form-select form-select-sm mb-1">
+                <option value="generate">сгенерировать новый</option>
+                <option value="desktop" {{ "selected" if is_official(a.api_id) or not a.api_id else "" }}>как у Telegram Desktop (импорт TData)</option>
+                <option value="manual">вручную (поля ниже)</option>
+              </select>
+              <input name="device_model" class="form-control form-control-sm mb-1" placeholder="модель, напр. PC 64bit" value="{{ a.device_model or '' }}">
+              <input name="system_version" class="form-control form-control-sm mb-1" placeholder="система, напр. Windows 11" value="{{ a.system_version or '' }}">
+              <input name="app_version" class="form-control form-control-sm mb-1" placeholder="версия приложения" value="{{ a.app_version or '' }}">
+              <input name="lang_code" class="form-control form-control-sm mb-1" placeholder="язык (ru)" value="{{ a.lang_code or '' }}">
+              <button class="btn btn-sm btn-outline-secondary w-100">Сохранить профиль</button>
+            </form>
+          </details>
           {% if a.paused_until and a.paused_until > now %}<div><span class="badge bg-warning text-dark" title="Автостоп после FloodWait, серия {{ a.flood_streak }}">пауза до {{ a.paused_until.strftime('%H:%M:%S') }} UTC</span></div>{% endif %}
         </td>
         <td>
@@ -239,10 +293,23 @@
         </td>
       </tr>
     {% else %}
-      <tr><td colspan="9" class="text-muted">Нет аккаунтов</td></tr>
+      <tr><td colspan="12" class="text-muted">Нет аккаунтов</td></tr>
     {% endfor %}
     </tbody>
   </table>
   </div>
 </div>
+<script>
+(function () {
+  var all = document.getElementById('check-all'), counter = document.getElementById('sel-count');
+  function boxes() { return document.querySelectorAll('.acc-check'); }
+  function update() {
+    var n = document.querySelectorAll('.acc-check:checked').length;
+    counter.textContent = n ? 'выбрано: ' + n : '';
+    all.checked = n > 0 && n === boxes().length;
+  }
+  all.addEventListener('change', function () { boxes().forEach(function (b) { b.checked = all.checked; }); update(); });
+  boxes().forEach(function (b) { b.addEventListener('change', update); });
+})();
+</script>
 {% endblock %}

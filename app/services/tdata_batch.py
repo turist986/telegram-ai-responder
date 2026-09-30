@@ -8,9 +8,18 @@
   2. run_job — фоновая задача: аккаунты входят по одному с паузами (не «залпом»), каждый
      через свой прокси; ошибка одного не отменяет остальные; прогресс виден в панели.
 
+Приложение (api_id) для каждого аккаунта — один из режимов API_MODES:
+  auto    — сеанс создаётся под официальным Telegram Desktop, затем через него же
+            автоматически создаётся собственное приложение на my.telegram.org (код входа на
+            сайт читается из чата «Telegram» самим сеансом) и аккаунт переводится на него;
+  pool    — свободные места в уже загруженных пулах api_id: сеанс сразу создаётся под ними;
+  desktop — остаётся официальный Telegram Desktop (api_id 2040).
+В любом режиме приложение и профиль устройства, с которыми создан сеанс, сохраняются у
+аккаунта — воркер подключается тем же клиентом («нет профиля устройства» больше не бывает).
+
 Состояние задач хранится в памяти процесса веб-панели (она работает в одном процессе).
-Пароли (локальный код Desktop, облачный 2FA) в задаче не сохраняются — живут только в
-аргументах фоновой корутины и исчезают вместе с ней."""
+Пароли (локальный код Desktop, облачный 2FA — общий или свой у каждого аккаунта) в задаче
+не сохраняются — живут только в аргументах фоновой корутины и исчезают вместе с ней."""
 import asyncio
 import logging
 import random
@@ -27,8 +36,11 @@ from starlette.concurrency import run_in_threadpool
 from ..config import settings
 from ..database import SessionLocal
 from ..models import Account
+from . import device_profile
+from .api_autocreate import AutoCreateError, apply_own_app, create_own_app
 from .archive_utils import ArchiveError, extract_tdata_archive
-from .onboarding import proxy_conflict_text, proxy_in_use
+from .onboarding import list_api_pools, proxy_conflict_text, proxy_in_use
+from .settings_store import get_protection
 from .proxy import ProxyConfigError, mask_proxy, normalize_proxy, parse_proxy, proxy_identity
 from .session_files import discard_session_file, finalize_tdata_account, fresh_session_path
 from .session_utils import find_tdata_dirs, tdata_to_session
@@ -38,6 +50,11 @@ logger = logging.getLogger(__name__)
 _IDENT_RE = re.compile(r"^[\w.+\-]{1,64}$")
 _SKIP_NAMES = {"tdata", "telegram", "telegram desktop"}
 JOB_KEEP_SECONDS = 3600
+API_MODES = {
+    "auto": "создать своё приложение автоматически",
+    "pool": "из загруженных пулов api_id",
+    "desktop": "официальный Telegram Desktop (без своего приложения)",
+}
 
 
 class TDataBatchError(ValueError):
@@ -52,6 +69,8 @@ class BatchItem:
     source: str
     status: str = "queued"   # queued | running | ok | error | skipped
     message: str = ""
+    # приложение + профиль, под которыми создавать сеанс (режим pool); None — Telegram Desktop
+    api: dict | None = None
 
 
 @dataclass
@@ -59,6 +78,7 @@ class BatchJob:
     token: str
     items: list[BatchItem]
     workdir: Path
+    api_mode: str = "desktop"
     created_at: float = field(default_factory=time.time)
     finished_at: float | None = None
     task: asyncio.Task | None = None
@@ -94,11 +114,20 @@ def prepare_batch(
     identifiers_text: str = "",
     replace_existing: bool = False,
     archive_password: str | None = None,
+    api_mode: str = "desktop",
 ) -> BatchJob:
     """Распаковывает архивы (name, path), находит TData, подбирает идентификаторы и прокси и
     проверяет всё. Бросает TDataBatchError. Ничего не пишет в БД и не ходит в Telegram."""
     if not archives:
         raise TDataBatchError("Не выбрано ни одного архива")
+    if api_mode not in API_MODES:
+        raise TDataBatchError("Неизвестный режим выбора api_id")
+    if api_mode == "auto":
+        from .browser_deps import playwright_available_cached
+
+        ok, hint = playwright_available_cached()
+        if not ok:
+            raise TDataBatchError(f"Автосоздание api_id недоступно: {hint} — или выберите другой режим api_id")
 
     found: list[tuple[str, Path, Path, str]] = []  # (имя архива, корень, папка TData, имя без расширения)
     for i, (name, path) in enumerate(archives):
@@ -181,10 +210,70 @@ def prepare_batch(
         if ident in skipped:
             item.status, item.message = "skipped", "уже есть сессия — пропущен (включите «Заменить существующие», чтобы перезаписать)"
         items.append(item)
-    return BatchJob(token=secrets.token_urlsafe(12), items=items, workdir=workdir)
+    if api_mode == "pool":
+        _assign_pools(db, [i for i in items if i.status == "queued"])
+    return BatchJob(token=secrets.token_urlsafe(12), items=items, workdir=workdir, api_mode=api_mode)
 
 
-async def run_job(job: BatchJob, *, passcode: str | None = None, cloud_password: str | None = None) -> None:
+def _assign_pools(db: Session, items: list[BatchItem]) -> None:
+    """Раздаёт аккаунтам места в пулах api_id (как «Раскидать по пулам»), каждому — свой
+    профиль устройства. Места не хватает — ошибка до первого обращения к Telegram."""
+    limit = get_protection(db)["api_pool_max_accounts"]
+    replacing = {i.identifier for i in items}
+    pools = []
+    for p in list_api_pools(db):
+        if device_profile.is_official_desktop(p["api_id"]):
+            continue
+        # аккаунты, которые сейчас перезаписываются, место в своём пуле освобождают
+        count = sum(1 for m in p["members"] if m not in replacing)
+        if count < limit:
+            pools.append({"api_id": p["api_id"], "api_hash": p["api_hash"], "free": limit - count})
+    capacity = sum(p["free"] for p in pools)
+    if capacity < len(items):
+        raise TDataBatchError(f"В пулах api_id свободно мест: {capacity}, а аккаунтов для импорта {len(items)}. "
+                              f"Загрузите ещё приложения на странице «Аккаунты» или выберите режим «создать автоматически»")
+    used = device_profile.used_profiles(db)
+    qi = 0
+    for item in items:
+        candidates = [p for p in pools if p["free"] > 0]
+        pool = candidates[qi % len(candidates)]
+        pool["free"] -= 1
+        qi += 1
+        profile = device_profile.generate_profile(used)
+        used.add((profile["device_model"], profile["system_version"], profile["app_version"]))
+        item.api = {"api_id": pool["api_id"], "api_hash": pool["api_hash"], **profile}
+
+
+_PW_LINE_RE = re.compile(r"^(\S+?)\s*[:;=\t ]\s*(.+)$")
+
+
+def parse_cloud_passwords(text: str, identifiers: list[str]) -> dict[str, str]:
+    """Облачные пароли (2FA) по аккаунтам. Два формата:
+      * «идентификатор:пароль» (или через ; = пробел таб) — по строке, любые аккаунты, в любом порядке;
+      * просто пароль по строке на КАЖДЫЙ аккаунт, в том же порядке (прочерк «-» — без пароля).
+    Бросает TDataBatchError. Пустой текст — пустой словарь."""
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    if not lines:
+        return {}
+    known = set(identifiers)
+    mapped: dict[str, str] = {}
+    for ln in lines:
+        m = _PW_LINE_RE.match(ln)
+        if not (m and m.group(1) in known):
+            mapped = {}
+            break
+        mapped[m.group(1)] = m.group(2)
+    if mapped:
+        return mapped
+    if len(lines) != len(identifiers):
+        raise TDataBatchError(
+            f"Паролей 2FA указано {len(lines)}, а аккаунтов {len(identifiers)}. Либо по строке на каждый аккаунт "
+            f"в порядке: {', '.join(identifiers)} (прочерк «-» — без пароля), либо строки вида «идентификатор:пароль»")
+    return {ident: pw for ident, pw in zip(identifiers, lines) if pw != "-"}
+
+
+async def run_job(job: BatchJob, *, passcode: str | None = None, cloud_password: str | None = None,
+                  cloud_passwords: dict[str, str] | None = None) -> None:
     try:
         first = True
         for item in job.items:
@@ -197,8 +286,9 @@ async def run_job(job: BatchJob, *, passcode: str | None = None, cloud_password:
             dest = fresh_session_path(item.identifier)
             try:
                 proxy_tuple = parse_proxy(item.proxy)
-                await run_in_threadpool(tdata_to_session, item.tdata_dir, dest, proxy_tuple,
-                                        passcode=passcode, cloud_password=cloud_password)
+                password = (cloud_passwords or {}).get(item.identifier) or cloud_password
+                used = await run_in_threadpool(tdata_to_session, item.tdata_dir, dest, proxy_tuple,
+                                               passcode=passcode, cloud_password=password, api=item.api)
             except RuntimeError as exc:
                 logger.warning("TData import failed for %s: %s", item.identifier, exc)
                 item.status, item.message = "error", str(exc)
@@ -211,16 +301,35 @@ async def run_job(job: BatchJob, *, passcode: str | None = None, cloud_password:
                 continue
             try:
                 with SessionLocal() as db:
-                    finalize_tdata_account(db, item.identifier, dest, item.proxy)
+                    finalize_tdata_account(db, item.identifier, dest, item.proxy, api=used)
             except Exception as exc:  # noqa: BLE001
                 logger.exception("Could not save account %s after import", item.identifier)
                 item.status, item.message = "error", f"сеанс создан, но сохранить аккаунт не удалось: {exc}"
                 continue
+            note = ""
+            if job.api_mode == "auto":
+                item.message = "сеанс создан, создаём своё приложение (api_id) на my.telegram.org…"
+                note = await _auto_create(item, dest, used)
             item.status = "ok"
-            item.message = "готово; автоответчик выключен — включите на странице «Аккаунты» через 30–60 минут"
+            item.message = "готово" + note + "; автоответчик выключен — включите на странице «Аккаунты» через 30–60 минут"
     finally:
         shutil.rmtree(job.workdir, ignore_errors=True)  # распакованные ключи не должны лежать на диске дольше нужного
         job.finished_at = time.time()
+
+
+async def _auto_create(item: BatchItem, dest: Path, used: dict) -> str:
+    """Своё приложение для только что импортированного аккаунта. Неудача не делает импорт
+    ошибочным: аккаунт остаётся рабочим на официальном Telegram Desktop."""
+    try:
+        creds = await create_own_app(str(dest), item.proxy, used)
+    except AutoCreateError as exc:
+        logger.warning("API app auto-creation failed for %s: %s", item.identifier, exc)
+        return (f", но своё приложение не создано ({exc}) — аккаунт работает на API Telegram Desktop; "
+                f"создать позже можно кнопкой на странице «Аккаунты»")
+    with SessionLocal() as db:
+        account = db.query(Account).filter_by(identifier=item.identifier).one()
+        apply_own_app(db, account, creds)
+    return f", своё приложение api_id {creds['api_id']}"
 
 
 def active_job() -> BatchJob | None:
@@ -244,17 +353,20 @@ def ensure_no_active_job() -> None:
         raise TDataBatchError("Сейчас уже идёт другой импорт — дождитесь его окончания (аккаунты входят по одному с паузами)")
 
 
-def start_job(job: BatchJob, *, passcode: str | None = None, cloud_password: str | None = None) -> None:
+def start_job(job: BatchJob, *, passcode: str | None = None, cloud_password: str | None = None,
+              cloud_passwords: dict[str, str] | None = None) -> None:
     """Регистрирует и запускает фоновую задачу. Вызывать из event loop панели."""
     ensure_no_active_job()
     _JOBS[job.token] = job
-    job.task = asyncio.create_task(run_job(job, passcode=passcode, cloud_password=cloud_password))
+    job.task = asyncio.create_task(run_job(job, passcode=passcode, cloud_password=cloud_password,
+                                           cloud_passwords=cloud_passwords))
 
 
 def job_view(job: BatchJob) -> dict:
     """JSON для страницы прогресса. Прокси — без логина/пароля."""
     return {
         "done": not job.running,
+        "api_mode": API_MODES.get(job.api_mode, job.api_mode),
         "counts": {s: sum(1 for i in job.items if i.status == s) for s in ("queued", "running", "ok", "error", "skipped")},
         "items": [
             {"identifier": i.identifier, "source": i.source, "proxy": mask_proxy(i.proxy) if i.proxy else "—",

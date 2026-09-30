@@ -49,6 +49,26 @@
   </div>
 
   <div class="card p-3 mb-3">
+    <h6 class="mb-2">Приложение (api_id / api_hash)</h6>
+    {% for key, label in api_modes.items() %}
+    <div class="form-check">
+      <input class="form-check-input" type="radio" name="api_mode" id="api_{{ key }}" value="{{ key }}"
+             {{ "checked" if v.api_mode == key else "" }}
+             {{ "disabled" if (key == "auto" and not browser_ok) or (key == "pool" and not pool_free) else "" }}>
+      <label class="form-check-label small" for="api_{{ key }}">
+        {% if key == "auto" %}<b>Создать своё приложение автоматически</b> (рекомендуется) — после входа сеанс сам получает код
+          my.telegram.org и создаёт api_id/api_hash через прокси аккаунта; вводить ничего не нужно
+          {% if not browser_ok %}<span class="text-warning">— недоступно: {{ browser_hint }}</span>{% endif %}
+        {% elif key == "pool" %}Взять из загруженных пулов api_id (свободных мест: {{ pool_free }})
+        {% else %}Официальный Telegram Desktop (api_id 2040) — без своего приложения{% endif %}
+      </label>
+    </div>
+    {% endfor %}
+    <div class="section-hint mt-2">В любом режиме у аккаунта сохраняется профиль устройства, с которым создан сеанс, — автоответчик
+      подключается тем же «устройством».</div>
+  </div>
+
+  <div class="card p-3 mb-3">
     <details>
       <summary class="small">Пароли (если нужны)</summary>
       <div class="row g-2 mt-1">
@@ -61,11 +81,18 @@
           <input type="password" name="tdata_passcode" class="form-control form-control-sm" autocomplete="new-password">
         </div>
         <div class="col-md-4">
-          <label class="form-label small mb-1">Облачный пароль (2FA)</label>
+          <label class="form-label small mb-1">Облачный пароль (2FA) — общий</label>
           <input type="password" name="cloud_password" class="form-control form-control-sm" autocomplete="new-password">
         </div>
       </div>
-      <div class="section-hint mt-2">Пароль применяется ко всем аккаунтам в этой загрузке; у аккаунтов с разными паролями импортируйте отдельными пачками. Пароли нигде не сохраняются.</div>
+      <label class="form-label small mb-1 mt-3">Облачные пароли (2FA) — свои у каждого аккаунта</label>
+      <textarea name="cloud_passwords" class="form-control form-control-sm" rows="4" spellcheck="false" autocomplete="off"
+                placeholder="1:пароль_первого&#10;2:пароль_второго&#10;&#10;или просто по паролю на строку в порядке аккаунтов (прочерк «-» — без пароля)"></textarea>
+      <div class="section-hint mt-2">
+        Формат: <code>идентификатор:пароль</code> по строке (любые аккаунты, в любом порядке) либо просто пароль на каждой строке —
+        по одному на аккаунт, в том же порядке, что и прокси. Для аккаунтов, которых нет в списке, используется общий пароль.
+        Пароли нигде не сохраняются.
+      </div>
     </details>
   </div>
 

@@ -20,6 +20,8 @@ data/app.db-*
 data/sessions/*.session
 data/sessions/*.session-journal
 data/sessions/*.session.lock
+# ...и вообще всё в каталоге сессий (в т.ч. распакованные ключи TData: key_datas и т.п.)
+data/sessions/
 
 # Таблица менеджеров, загруженная через панель/create_session.py (реальные ФИО/телефоны/прокси)
 data/managers.xlsx

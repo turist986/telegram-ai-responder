@@ -46,11 +46,17 @@ class Base(unittest.TestCase):
         self.fail_for: set[str] = set()
         outer = self
 
-        def fake_convert(tdir, dest, proxy, *, passcode=None, cloud_password=None):
-            outer.calls.append({"dest": Path(dest).name, "proxy": proxy, "passcode": passcode, "cloud": cloud_password})
+        def fake_convert(tdir, dest, proxy, *, passcode=None, cloud_password=None, api=None):
+            outer.calls.append({"dest": Path(dest).name, "proxy": proxy, "passcode": passcode, "cloud": cloud_password,
+                                "api": api})
             if any(k in str(dest) for k in outer.fail_for):
                 raise RuntimeError("Сеанс в этой TData недействителен")
             Path(dest).write_bytes(b"session")
+            if api:
+                return {**api, "phone": "+100"}
+            return {"api_id": 2040, "api_hash": "b18441a1ff607e10a989891a5462e627", "device_model": "XPS L701X",
+                    "system_version": "Windows 10", "app_version": "3.4.3 x64", "lang_code": "ru",
+                    "system_lang_code": "ru-RU", "phone": "+100"}
 
         p = patch("app.services.tdata_batch.tdata_to_session", fake_convert)
         p.start()

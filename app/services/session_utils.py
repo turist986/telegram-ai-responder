@@ -93,7 +93,8 @@ def describe_error(exc: BaseException) -> str:
 
 
 def tdata_to_session(tdata_dir: Path, out_session_path: Path, proxy: tuple | None = None, *,
-                     passcode: str | None = None, cloud_password: str | None = None) -> None:
+                     passcode: str | None = None, cloud_password: str | None = None,
+                     api: dict | None = None) -> dict:
     """Конвертирует папку TData (Telegram Desktop) в .session файл Telethon.
 
     proxy — кортеж PySocks (см. proxy.parse_proxy). CreateNewSession делает настоящие
@@ -105,6 +106,12 @@ def tdata_to_session(tdata_dir: Path, out_session_path: Path, proxy: tuple | Non
 
     passcode — локальный код-пароль Telegram Desktop (если профиль им защищён);
     cloud_password — облачный пароль (2FA) аккаунта, нужен для входа в новый сеанс.
+    api — приложение и устройство нового сеанса: api_id, api_hash, device_model,
+    system_version, app_version, lang_code, system_lang_code. Не задано — официальный
+    Telegram Desktop (api_id 2040) со случайным правдоподобным устройством.
+
+    Возвращает словарь с теми же ключами (с чем РЕАЛЬНО создан сеанс) плюс phone — его
+    надо сохранить у аккаунта: воркер обязан подключаться тем же приложением и устройством.
 
     Использует opentele CreateNewSession, а НЕ UseCurrentSession: результат — новый,
     отдельный сеанс (свой auth_key), который появляется как собственная запись в
@@ -134,7 +141,7 @@ def tdata_to_session(tdata_dir: Path, out_session_path: Path, proxy: tuple | Non
     patch_opentele_for_new_python()  # см. _opentele_compat.py — совместимость с Python 3.13+
 
     try:
-        from opentele.api import CreateNewSession
+        from opentele.api import API, APIData, CreateNewSession
         from opentele.td import TDesktop
     except ImportError as exc:
         raise RuntimeError(
@@ -142,6 +149,20 @@ def tdata_to_session(tdata_dir: Path, out_session_path: Path, proxy: tuple | Non
         ) from exc
 
     tdata_dir = _find_real_tdata_dir(Path(tdata_dir))
+
+    if api and api.get("api_id"):
+        new_api = APIData(
+            api_id=int(api["api_id"]), api_hash=api["api_hash"], device_model=api["device_model"],
+            system_version=api["system_version"], app_version=api["app_version"],
+            lang_code=api.get("lang_code") or "ru", system_lang_code=api.get("system_lang_code") or "ru-RU",
+            lang_pack="",  # langPack — только для официальных приложений (как и у Telethon)
+        )
+    else:
+        # официальный Desktop с правдоподобным случайным устройством (не у всех один «Desktop»)
+        new_api = API.TelegramDesktop.Generate(system="windows", unique_id=Path(out_session_path).name)
+        new_api.lang_code, new_api.system_lang_code = "ru", "ru-RU"
+    used = {k: getattr(new_api, k) for k in ("api_id", "api_hash", "device_model", "system_version",
+                                              "app_version", "lang_code", "system_lang_code")}
 
     async def _convert():
         # opentele сам перебирает суффиксы "s"/"1"/"0" для файла ключа
@@ -160,7 +181,12 @@ def tdata_to_session(tdata_dir: Path, out_session_path: Path, proxy: tuple | Non
         kwargs = {"proxy": proxy} if proxy else {}
         if cloud_password:
             kwargs["password"] = cloud_password
-        client = await tdesk.ToTelethon(session=str(out_session_path), flag=CreateNewSession, **kwargs)
+        client = await tdesk.ToTelethon(session=str(out_session_path), flag=CreateNewSession, api=new_api, **kwargs)
+        try:
+            me = await client.get_me()
+            used["phone"] = f"+{me.phone}" if me and me.phone else None
+        except Exception:  # noqa: BLE001 — номер лишь для информации, сеанс уже создан
+            used["phone"] = None
         await client.disconnect()
 
     # Вызывается из async-обработчика FastAPI, где цикл событий уже запущен, а
@@ -177,3 +203,4 @@ def tdata_to_session(tdata_dir: Path, out_session_path: Path, proxy: tuple | Non
             # этой обёртки любая другая ошибка превращалась бы в неинформативный
             # HTTP 500 без единого слова о причине. Ctrl+C/выход/отмена не глотаем.
             raise RuntimeError(describe_error(exc)) from exc
+    return used

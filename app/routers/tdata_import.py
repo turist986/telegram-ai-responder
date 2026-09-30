@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 import shutil
@@ -14,6 +15,10 @@ from ..config import settings
 from ..database import get_db
 from ..services import tdata_batch as tb
 from ..services.archive_utils import detect_kind
+from ..services.browser_deps import playwright_available_cached
+from ..services.device_profile import is_official_desktop
+from ..services.onboarding import list_api_pools
+from ..services.settings_store import get_protection
 from ..services.session_utils import tdata_available
 from ..templating import templates
 
@@ -21,15 +26,23 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/accounts/import-tdata")
 
 
-def _form(request: Request, error: str = "", values: dict | None = None):
+async def _form(request: Request, db: Session, error: str = "", values: dict | None = None):
     available, hint = tdata_available()
     active = tb.active_job()
+    # проверка Playwright использует синхронный API — не в event loop панели
+    browser_ok, browser_hint = await asyncio.to_thread(playwright_available_cached)
+    limit = get_protection(db)["api_pool_max_accounts"]
+    pool_free = sum(max(0, limit - p["count"]) for p in list_api_pools(db) if not is_official_desktop(p["api_id"]))
+    values = dict(values or {})
+    values.setdefault("api_mode", "auto" if browser_ok else ("pool" if pool_free else "desktop"))
     return templates.TemplateResponse(
         "tdata_import.html",
         {
-            "request": request, "error": error, "v": values or {},
+            "request": request, "error": error, "v": values,
             "enabled": settings.allow_tdata_import, "available": available, "hint": hint,
             "active_token": active.token if active else None,
+            "browser_ok": browser_ok, "browser_hint": browser_hint, "pool_free": pool_free,
+            "api_modes": tb.API_MODES,
         },
     )
 
@@ -48,8 +61,8 @@ def _save_uploads(files: list[UploadFile], target: Path) -> list[tuple[str, Path
 
 
 @router.get("", response_class=HTMLResponse)
-async def import_page(request: Request, user: str = Depends(require_login)):
-    return _form(request)
+async def import_page(request: Request, user: str = Depends(require_login), db: Session = Depends(get_db)):
+    return await _form(request, db)
 
 
 @router.post("")
@@ -62,23 +75,26 @@ async def import_start(
     archive_password: str = Form(""),
     tdata_passcode: str = Form(""),
     cloud_password: str = Form(""),
+    cloud_passwords: str = Form(""),
+    api_mode: str = Form("desktop"),
     user: str = Depends(require_login),
     db: Session = Depends(get_db),
 ):
-    values = {"proxies": proxies, "identifiers": identifiers, "replace_existing": bool(replace_existing)}
+    values = {"proxies": proxies, "identifiers": identifiers, "replace_existing": bool(replace_existing),
+              "api_mode": api_mode}
     if not settings.allow_tdata_import:
-        return _form(request, "Импорт TData отключён в настройках (ALLOW_TDATA_IMPORT=false в .env)", values)
+        return await _form(request, db, "Импорт TData отключён в настройках (ALLOW_TDATA_IMPORT=false в .env)", values)
     available, hint = tdata_available()
     if not available:
-        return _form(request, f"Импорт TData сейчас недоступен: {hint}", values)
+        return await _form(request, db, f"Импорт TData сейчас недоступен: {hint}", values)
     try:
         tb.ensure_no_active_job()
     except tb.TDataBatchError as exc:
-        return _form(request, str(exc), values)
+        return await _form(request, db, str(exc), values)
 
     files = [f for f in archives if f.filename]
     if not files:
-        return _form(request, "Выберите или перетащите хотя бы один архив (.zip или .rar)", values)
+        return await _form(request, db, "Выберите или перетащите хотя бы один архив (.zip или .rar)", values)
 
     workdir = Path(tempfile.mkdtemp(prefix="tdata_import_"))
     try:
@@ -90,17 +106,20 @@ async def import_start(
             tb.prepare_batch, db, saved, workdir / "x",
             proxies_text=proxies, identifiers_text=identifiers,
             replace_existing=bool(replace_existing), archive_password=archive_password or None,
+            api_mode=api_mode,
         )
+        passwords = tb.parse_cloud_passwords(cloud_passwords, [i.identifier for i in job.items])
         shutil.rmtree(workdir / "up", ignore_errors=True)  # исходные архивы больше не нужны
         job.workdir = workdir
-        tb.start_job(job, passcode=tdata_passcode or None, cloud_password=cloud_password or None)
+        tb.start_job(job, passcode=tdata_passcode or None, cloud_password=cloud_password or None,
+                     cloud_passwords=passwords)
     except tb.TDataBatchError as exc:
         shutil.rmtree(workdir, ignore_errors=True)
-        return _form(request, str(exc), values)
+        return await _form(request, db, str(exc), values)
     except Exception:
         shutil.rmtree(workdir, ignore_errors=True)
         logger.exception("TData batch preparation failed")
-        return _form(request, "Внутренняя ошибка при подготовке импорта — подробности в логе сервера", values)
+        return await _form(request, db, "Внутренняя ошибка при подготовке импорта — подробности в логе сервера", values)
     return RedirectResponse(f"/accounts/import-tdata/{job.token}", status_code=303)
 
 
