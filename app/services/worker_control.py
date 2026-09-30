@@ -4,7 +4,7 @@ import sys
 
 import psutil
 
-from ..config import BASE_DIR
+from ..config import BASE_DIR, settings
 
 PID_FILE = BASE_DIR / "data" / "worker.pid"
 LOG_FILE = BASE_DIR / "data" / "worker.log"
@@ -31,19 +31,21 @@ def start_worker() -> None:
     if is_running():
         return
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    log = LOG_FILE.open("ab")
     flags = 0
     if sys.platform == "win32":
         flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
-    proc = subprocess.Popen(
-        [sys.executable, str(BASE_DIR / "run_worker.py")],
-        cwd=str(BASE_DIR),
-        stdout=log,
-        stderr=log,
-        stdin=subprocess.DEVNULL,
-        creationflags=flags,
-        start_new_session=sys.platform != "win32",
-    )
+    # дочерний процесс получает свою копию дескриптора; в панели файл закрываем сразу,
+    # иначе каждое нажатие «Запустить воркер» оставляло открытый дескриптор до рестарта панели
+    with LOG_FILE.open("ab") as log:
+        proc = subprocess.Popen(
+            [sys.executable, str(BASE_DIR / "run_worker.py")],
+            cwd=str(BASE_DIR),
+            stdout=log,
+            stderr=log,
+            stdin=subprocess.DEVNULL,
+            creationflags=flags,
+            start_new_session=sys.platform != "win32",
+        )
     PID_FILE.write_text(str(proc.pid))
 
 
@@ -66,7 +68,7 @@ def stop_worker() -> None:
     # Убираем только «осиротевшие» блокировки убитых процессов. Удалять все подряд нельзя:
     # блокировка, принадлежащая ЖИВОМУ воркеру, — единственная защита сессии от второго
     # процесса, и её потеря открывает путь к AuthKeyDuplicatedError.
-    sessions_dir = BASE_DIR / "data" / "sessions"
+    sessions_dir = settings.sessions_dir  # с учётом SESSIONS_DIR из .env
     if sessions_dir.exists():
         for lock in sessions_dir.glob("*.lock"):
             try:

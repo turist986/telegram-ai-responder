@@ -1,3 +1,5 @@
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
@@ -93,7 +95,7 @@ async def save_llm_key(
     try:
         set_llm_api_key(db, provider, api_key)
     except ValueError as exc:
-        return RedirectResponse(f"/settings?msg={exc}", status_code=303)
+        return RedirectResponse(f"/settings?msg={quote(str(exc))}", status_code=303)
     return RedirectResponse("/settings?msg=Ключ+сохранён", status_code=303)
 
 
@@ -106,7 +108,7 @@ async def clear_llm_key(
     try:
         set_llm_api_key(db, provider, "")
     except ValueError as exc:
-        return RedirectResponse(f"/settings?msg={exc}", status_code=303)
+        return RedirectResponse(f"/settings?msg={quote(str(exc))}", status_code=303)
     return RedirectResponse(
         "/settings?msg=Ключ+удалён+из+панели+(если+задан+в+.env,+будет+использован+он)", status_code=303
     )
@@ -160,7 +162,7 @@ async def save_schedule(
             keep_active_dialog_minutes=keep_active_dialog_minutes,
         )
     except ScheduleConfigError as exc:
-        return RedirectResponse(f"/settings?msg={exc}", status_code=303)
+        return RedirectResponse(f"/settings?msg={quote(str(exc))}", status_code=303)
     return RedirectResponse("/settings", status_code=303)
 
 
@@ -170,7 +172,7 @@ async def save_protection(request: Request, user: str = Depends(require_login), 
     try:
         set_protection(db, form)
     except ProtectionConfigError as exc:
-        return RedirectResponse(f"/settings?msg={exc}#protection", status_code=303)
+        return RedirectResponse(f"/settings?msg={quote(str(exc))}#protection", status_code=303)
     return RedirectResponse("/settings?msg=Настройки+защиты+сохранены#protection", status_code=303)
 
 

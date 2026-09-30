@@ -15,6 +15,10 @@ class DialogOverrideError(ValueError):
     pass
 
 
+MAX_MESSAGE_LIMIT = 100_000
+MAX_PAUSE_MINUTES = 60 * 24 * 365  # год
+
+
 @dataclass
 class DialogRow:
     account: Account
@@ -86,7 +90,7 @@ def list_active_dialogs(db: Session, limit: int = 100) -> list[DialogRow]:
 def set_override(db: Session, account_id: int, chat_id: str, message_limit: str, pause_minutes: str) -> None:
     """Строки из формы -> (int | None, int | None); пустое поле -> None (использовать общую
     настройку). Требует уже существующий ChatStatus — см. get_limit_override/set_limit_override."""
-    def _parse(raw: str, label: str) -> int | None:
+    def _parse(raw: str, label: str, maximum: int) -> int | None:
         raw = (raw or "").strip()
         if not raw:
             return None
@@ -96,10 +100,12 @@ def set_override(db: Session, account_id: int, chat_id: str, message_limit: str,
             raise DialogOverrideError(f"{label}: введите целое число или оставьте пустым")
         if value < 1:
             raise DialogOverrideError(f"{label}: должно быть не меньше 1")
+        if value > maximum:
+            raise DialogOverrideError(f"{label}: не больше {maximum}")
         return value
 
-    limit = _parse(message_limit, "Лимит сообщений")
-    pause = _parse(pause_minutes, "Пауза, мин")
+    limit = _parse(message_limit, "Лимит сообщений", MAX_MESSAGE_LIMIT)
+    pause = _parse(pause_minutes, "Пауза, мин", MAX_PAUSE_MINUTES)
     if not set_limit_override(db, account_id, chat_id, limit, pause):
         raise DialogOverrideError(
             "Для этого чата ещё не определён статус (аккаунт был выключен на момент "

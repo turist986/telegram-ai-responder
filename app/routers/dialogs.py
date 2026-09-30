@@ -8,7 +8,7 @@ from ..auth import require_login
 from ..database import get_db
 from ..models import Account
 from ..services.chat_status import pause_now, set_limit_override
-from ..services.dialogs import DialogOverrideError, list_active_dialogs, set_override
+from ..services.dialogs import MAX_PAUSE_MINUTES, DialogOverrideError, list_active_dialogs, set_override
 from ..services.settings_store import get_protection
 from ..templating import templates
 
@@ -60,12 +60,16 @@ async def clear_dialog_override(
 async def pause_dialog_now(
     account_id: int,
     chat_id: str,
-    minutes: int = Form(...),
+    minutes: str = Form(""),
     user: str = Depends(require_login),
     db: Session = Depends(get_db),
 ):
-    if minutes < 1:
-        return RedirectResponse("/dialogs?msg=" + quote("Пауза: укажите хотя бы 1 минуту"), status_code=303)
+    # str, а не int: нечисловой ввод давал голую JSON-ошибку 422 вместо сообщения на странице
+    if not minutes.strip().isdigit() or not 1 <= int(minutes) <= MAX_PAUSE_MINUTES:
+        return RedirectResponse(
+            "/dialogs?msg=" + quote(f"Пауза: укажите хотя бы 1 минуту (целое число, не больше {MAX_PAUSE_MINUTES})"),
+            status_code=303)
+    minutes = int(minutes)
     until = pause_now(db, account_id, chat_id, minutes)
     if until is None:
         return RedirectResponse(

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 import httpx
@@ -37,6 +38,27 @@ def http_error_text(provider_label: str, status: int) -> str:
     if hint:
         return f"Нейросеть {who}, ошибка {status}: {hint}"
     return f"Нейросеть {who} вернула ошибку {status}"
+
+
+# 529 — «перегружен» у Anthropic, 504 — таймаут шлюза: временные, стоит повторить
+_RETRY_STATUSES = (429, 500, 502, 503, 504, 529)
+RETRY_BASE_SECONDS = 2.0
+
+
+async def _backoff(attempt: int) -> None:
+    """Пауза перед повтором: без неё три попытки уходили за доли секунды, и при 429
+    (лимит запросов) повтор гарантированно получал тот же отказ."""
+    await asyncio.sleep(RETRY_BASE_SECONDS * (2 ** attempt))
+
+
+def _clean_reply(text, provider_label: str) -> str:
+    """Пустой ответ нейросети — это ошибка: иначе клиенту ушло бы сообщение из одной
+    пометки «ответ сгенерирован ИИ»."""
+    text = (text or "").strip() if isinstance(text, str) else ""
+    if not text:
+        who = f"«{provider_label}»" if provider_label else "ИИ-провайдера"
+        raise LLMError(f"Нейросеть {who} вернула пустой ответ")
+    return text
 
 
 def _api_key_for(provider_key: str) -> str | None:
@@ -103,18 +125,23 @@ async def _call_openai_compatible(
             try:
                 resp = await client.post(url, json=payload, headers=headers)
                 resp.raise_for_status()
-                data = resp.json()
-                return data["choices"][0]["message"]["content"].strip()
+                try:
+                    content = resp.json()["choices"][0]["message"]["content"]
+                except (ValueError, KeyError, IndexError, TypeError) as exc:
+                    raise LLMError(f"Нейросеть «{provider_label or 'ИИ'}» вернула ответ неожиданного формата") from exc
+                return _clean_reply(content, provider_label)
             except httpx.HTTPStatusError as exc:
                 logger.warning("LLM HTTP %s: %s", exc.response.status_code, exc.response.text[:300])
                 last_exc = exc
-                if exc.response.status_code in (429, 500, 502, 503) and attempt < 2:
+                if exc.response.status_code in _RETRY_STATUSES and attempt < 2:
+                    await _backoff(attempt)
                     continue
                 raise LLMError(http_error_text(provider_label, exc.response.status_code)) from exc
             except httpx.HTTPError as exc:
                 logger.warning("LLM network error (attempt %s): %s", attempt, exc)
                 last_exc = exc
                 if attempt < 2:
+                    await _backoff(attempt)
                     continue
                 raise LLMError(str(exc)) from exc
 
@@ -126,6 +153,8 @@ async def _call_anthropic(
     provider_label: str = "",
 ) -> str:
     messages = list(history)
+    while messages and messages[0].get("role") != "user":
+        messages.pop(0)
     messages.append({"role": "user", "content": user_message})
 
     payload = {"model": model, "system": system_prompt, "messages": messages, "max_tokens": 700}
@@ -142,18 +171,23 @@ async def _call_anthropic(
             try:
                 resp = await client.post(url, json=payload, headers=headers)
                 resp.raise_for_status()
-                data = resp.json()
-                return "".join(block["text"] for block in data["content"] if block["type"] == "text").strip()
+                try:
+                    content = "".join(b.get("text", "") for b in resp.json()["content"] if b.get("type") == "text")
+                except (ValueError, KeyError, TypeError, AttributeError) as exc:
+                    raise LLMError(f"Нейросеть «{provider_label or 'ИИ'}» вернула ответ неожиданного формата") from exc
+                return _clean_reply(content, provider_label)
             except httpx.HTTPStatusError as exc:
                 logger.warning("LLM HTTP %s: %s", exc.response.status_code, exc.response.text[:300])
                 last_exc = exc
-                if exc.response.status_code in (429, 500, 502, 503) and attempt < 2:
+                if exc.response.status_code in _RETRY_STATUSES and attempt < 2:
+                    await _backoff(attempt)
                     continue
                 raise LLMError(http_error_text(provider_label, exc.response.status_code)) from exc
             except httpx.HTTPError as exc:
                 logger.warning("LLM network error (attempt %s): %s", attempt, exc)
                 last_exc = exc
                 if attempt < 2:
+                    await _backoff(attempt)
                     continue
                 raise LLMError(str(exc)) from exc
 

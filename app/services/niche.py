@@ -66,6 +66,20 @@ def event_date(event) -> dt.datetime:
     return date
 
 
+def local_date(utc_naive: dt.datetime, tz_name: str | None) -> dt.date:
+    """Дата сообщения по часам менеджеров (SCHEDULE_TIMEZONE), а не по UTC: ниша «с 25-го»
+    задаётся в местной дате, и сообщение в 01:00 по Москве (22:00 UTC накануне) должно
+    получить нишу 25-го. Без пояса или при ошибке — дата по UTC, как раньше."""
+    if tz_name:
+        try:
+            from zoneinfo import ZoneInfo
+
+            return utc_naive.replace(tzinfo=dt.timezone.utc).astimezone(ZoneInfo(tz_name)).date()
+        except Exception:  # noqa: BLE001 — неизвестный пояс уже объясняется в логе расписания
+            pass
+    return utc_naive.date()
+
+
 def get_active_niche(db: Session, account_id: int, at: dt.date | dt.datetime) -> AccountNiche | None:
     """Ниша, действовавшая НА ДАТУ at (обычно — дата входящего сообщения, см. event_date).
     None, если ниш нет вовсе или все они начинаются позже этой даты."""

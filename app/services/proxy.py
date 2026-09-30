@@ -28,6 +28,8 @@ def build_proxy_url(scheme: str, host: str, port: str | int, user: str = "", pas
     port = str(port).strip()
     if not host or not port.isdigit():
         raise ProxyConfigError("Укажите хост и числовой порт прокси")
+    if not 1 <= int(port) <= 65535:
+        raise ProxyConfigError(f"Порт прокси {port} вне допустимого диапазона 1–65535")
     auth = ""
     if user:
         auth = quote(user, safe="")
@@ -151,18 +153,22 @@ def parse_proxy(proxy_str: str | None):
 
     normalized = normalize_proxy(proxy_str)
     parsed = urlparse(normalized)
+    try:
+        port = parsed.port
+    except ValueError as exc:  # порт вне 0–65535 в строке, собранной не через build_proxy_url
+        raise ProxyConfigError(f"Некорректный порт прокси: {exc}") from exc
     scheme = parsed.scheme.lower()
     if scheme not in _SCHEME_TO_PYSOCKS_TYPE:
         raise ProxyConfigError(
             f"Неизвестная схема прокси '{parsed.scheme}'. Используйте socks5://, socks4:// или http://"
         )
-    if not parsed.hostname or not parsed.port:
+    if not parsed.hostname or not port:
         raise ProxyConfigError("В прокси должны быть указаны хост и порт, например socks5://host:1080")
 
     proxy_type = getattr(socks, _SCHEME_TO_PYSOCKS_TYPE[scheme])
     username = unquote(parsed.username) if parsed.username else None
     password = unquote(parsed.password) if parsed.password else None
-    return (proxy_type, parsed.hostname, parsed.port, True, username, password)
+    return (proxy_type, parsed.hostname, port, True, username, password)
 
 
 # Публичные адреса дата-центров Telegram. Часть прокси (IPv6-only) не соединяет с

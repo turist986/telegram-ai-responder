@@ -66,7 +66,10 @@ def _read_rows(path: Path) -> tuple[list[dict], dict[int, str]]:
         }
         for idx, field in field_by_col.items():
             if idx < len(raw_row) and raw_row[idx] is not None:
-                value = str(raw_row[idx]).strip()
+                cell = raw_row[idx]
+                if isinstance(cell, float) and cell.is_integer():
+                    cell = int(cell)  # 79161234567.0 → 79161234567
+                value = str(cell).strip()
                 # «нет» вместо пустой ячейки — частая привычка; иначе оно попадёт в
                 # дисклеймер клиентам, а в прокси сломает подключение.
                 if field != "identifier" and value.lower() in _EMPTY_MARKS:

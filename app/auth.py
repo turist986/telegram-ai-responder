@@ -15,7 +15,12 @@ class NotAuthenticated(Exception):
 
 
 def verify_password(plain: str) -> bool:
-    return bcrypt.checkpw(plain.encode("utf-8"), settings.admin_password_hash.encode("utf-8"))
+    try:
+        return bcrypt.checkpw(plain.encode("utf-8"), (settings.admin_password_hash or "").encode("utf-8"))
+    except ValueError:
+        # ADMIN_PASSWORD_HASH в .env пустой или не bcrypt-хеш (python scripts/hash_password.py) —
+        # вход невозможен, но это «неверный пароль», а не падение страницы
+        return False
 
 
 def hash_password(plain: str) -> str:

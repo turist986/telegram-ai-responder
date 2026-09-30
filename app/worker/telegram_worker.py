@@ -30,7 +30,7 @@ from ..services.disclaimer import build_disclaimer
 from ..services.flood_guard import compute_pause, next_streak
 from ..services.knowledge_base import load_knowledge_base, load_prompt_template
 from ..services.llm_client import LLMError, generate_reply, is_llm_error_text
-from ..services.niche import event_date, get_active_niche, niche_prompt_block
+from ..services.niche import event_date, get_active_niche, local_date, niche_prompt_block
 from ..services.chat_status import INBOUND, OUTBOUND_MANUAL
 from ..services.chat_status import establish_status as establish_chat_status
 from ..services.chat_status import get_limit_override as get_chat_limit_override
@@ -269,11 +269,15 @@ class AccountWorker:
             self._catch_up_task.cancel()
         if self._poll_task:
             self._poll_task.cancel()
-        if self.client:
-            await self.client.disconnect()
-        if self._run_task:
-            self._run_task.cancel()
-        self._lock.release()
+        try:
+            if self.client:
+                await self.client.disconnect()
+        except Exception:  # noqa: BLE001 — оборванное соединение не должно оставить сессию заблокированной
+            logger.warning("Account %s: error while disconnecting", self.account_id, exc_info=True)
+        finally:
+            if self._run_task:
+                self._run_task.cancel()
+            self._lock.release()
         logger.info("Account %s: client stopped", self.account_id)
 
     # ------------------------------------------------------------------ автостоп при флуде
@@ -714,16 +718,23 @@ class AccountWorker:
                     self._note(event, f"без ответа: вне рабочего времени по расписанию (сейчас "
                                       f"{local_now:%H:%M}, {tz_label}). Если это не то время — задайте "
                                       f"SCHEDULE_TIMEZONE в .env")
-                    return
+                    return False
 
+            history_q = db.query(DialogMessage).filter_by(account_id=account.id, chat_id=chat_id)
+            current_row = self._row_ids.get((chat_id, event.id))
+            if current_row is not None:
+                # текущее сообщение уже записано в «Логи», но в запрос оно идёт отдельно как
+                # user_message — без этого фильтра нейросеть видела его дважды подряд
+                history_q = history_q.filter(DialogMessage.id != current_row)
             history_rows = (
-                db.query(DialogMessage)
-                .filter_by(account_id=account.id, chat_id=chat_id)
-                .order_by(DialogMessage.created_at.desc())
+                history_q.filter(DialogMessage.content != "")
+                .order_by(DialogMessage.created_at.desc(), DialogMessage.id.desc())
                 .limit(settings.history_limit)
                 .all()
             )
             history = [{"role": row.role, "content": row.content} for row in reversed(history_rows)]
+            if not user_text.strip():
+                user_text = "[собеседник прислал вложение без текста: фото, стикер, голосовое или файл]"
 
             if account.system_prompt:
                 system_prompt = account.system_prompt
@@ -741,7 +752,7 @@ class AccountWorker:
             # получило бы контекст более новой ниши, чем была актуальна на момент его прихода.
             # Добавляется поверх обычного промпта (и своего, и общего) — это фон про источник
             # заявки, а не замена базы знаний; приоритет реального диалога прописан в самом тексте.
-            niche = get_active_niche(db, account.id, event_date(event))
+            niche = get_active_niche(db, account.id, local_date(event_date(event), settings.schedule_timezone))
             if niche:
                 system_prompt = f"{system_prompt}\n\n{niche_prompt_block(niche)}"
 
@@ -768,7 +779,7 @@ class AccountWorker:
             logger.error("Account %s: LLM error: %s", self.account_id, exc)
             self._record_error(str(exc))
             self._note(event, f"без ответа: {exc}")
-            return
+            return False
         except asyncio.CancelledError:
             gen_task.cancel()
             raise
@@ -875,7 +886,6 @@ class WorkerManager:
         между ними, что и раньше — но независимо от такта reconcile()."""
         while not self._stopping:
             account_id = await self._start_queue.get()
-            self._queued.discard(account_id)
             try:
                 await self._start_one(account_id)
             except asyncio.CancelledError:
@@ -883,6 +893,7 @@ class WorkerManager:
             except Exception:
                 logger.exception("Account %s: unexpected error while starting", account_id)
             finally:
+                self._queued.discard(account_id)
                 self._start_queue.task_done()
             await asyncio.sleep(
                 random.uniform(settings.start_stagger_min_seconds, settings.start_stagger_max_seconds)

@@ -125,11 +125,13 @@ async def release_accounts(user: str = Depends(require_login)):
 
 @router.post("/worker/toggle")
 async def toggle_worker(user: str = Depends(require_login)):
+    # stop_worker() ждёт завершения процесса до 10 с — в потоке, иначе на это время
+    # подвисала вся панель у всех, кто в ней работает
     if worker_control.is_running():
-        worker_control.stop_worker()
+        await run_in_threadpool(worker_control.stop_worker)
         msg = "Воркер остановлен"
     else:
-        worker_control.start_worker()
+        await run_in_threadpool(worker_control.start_worker)
         msg = "Воркер запущен"
     return RedirectResponse(f"/accounts?msg={msg}", status_code=303)
 
@@ -350,7 +352,7 @@ async def upload_all(
         try:
             result = sync_accounts_from_excel(settings.managers_excel_path, db)
         except ValueError as exc:
-            return RedirectResponse(f"/accounts?msg={exc}", status_code=303)
+            return RedirectResponse(f"/accounts?msg={quote(str(exc))}", status_code=303)
         parts.append(f"Excel: {result['created']} новых, {result['updated']} обновлено")
 
     if has_auth:
@@ -367,7 +369,7 @@ async def upload_all(
                     with zipfile.ZipFile(zip_path) as zf:
                         zf.extractall(tmp_path / "tdata")
                 except zipfile.BadZipFile as exc:
-                    return RedirectResponse(f"/accounts?msg={exc}", status_code=303)
+                    return RedirectResponse(f"/accounts?msg={quote(str(exc))}", status_code=303)
 
                 tdata_dirs = _find_tdata_dirs(tmp_path / "tdata")
                 if len(tdata_dirs) > 1:
@@ -456,7 +458,7 @@ async def upload_all(
         account.is_authorized = False
         db.commit()
 
-    return RedirectResponse(f"/accounts?msg={'; '.join(parts)}", status_code=303)
+    return RedirectResponse(f"/accounts?msg={quote('; '.join(parts))}", status_code=303)
 
 
 @router.post("/sync-excel")
@@ -472,7 +474,7 @@ async def sync_excel(
     try:
         result = sync_accounts_from_excel(settings.managers_excel_path, db)
     except ValueError as exc:
-        return RedirectResponse(f"/accounts?msg={exc}", status_code=303)
+        return RedirectResponse(f"/accounts?msg={quote(str(exc))}", status_code=303)
 
     return RedirectResponse(
         f"/accounts?msg=Синхронизировано:+{result['created']}+новых,+{result['updated']}+обновлено",
