@@ -8,7 +8,7 @@ import httpx
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models import DialogMessage
+from app.models import ChatStatus, DialogMessage
 from app.services import llm_client
 from app.services.dialogs import DialogOverrideError, set_override
 from app.services.niche import local_date
@@ -16,6 +16,13 @@ from app.services.proxy import ProxyConfigError, normalize_proxy, parse_proxy
 from app.worker import telegram_worker as tw
 
 from tests.test_worker_logic import WorkerBase, _event, _save
+
+
+def _drop_history(account_id: int) -> None:
+    with SessionLocal() as db:
+        db.query(DialogMessage).filter_by(account_id=account_id).delete()
+        db.query(ChatStatus).filter_by(account_id=account_id).delete()
+        db.commit()
 
 
 class _Ctx:
@@ -28,6 +35,9 @@ class _Ctx:
 
 def _ready_worker(case: WorkerBase):
     acc, w = case.make_worker()
+    # за собой убираем историю: номера аккаунтов в тестовой SQLite переиспользуются после
+    # удаления, и чужие строки dialog_messages попали бы в проверки других тестов
+    case.addCleanup(_drop_history, acc.id)
     w.client = MagicMock()
     w.client.action = MagicMock(return_value=_Ctx())
     w.client.get_messages = AsyncMock(return_value=[])          # «кто начал чат» — история пуста
@@ -49,6 +59,22 @@ class HistoryTests(WorkerBase):
         self.assertIn("вложение без текста", user_message)
         first_history = gen.await_args_list[0].args[1]
         self.assertEqual(first_history, [])                         # самое первое сообщение — только user_message
+
+
+class SendTests(WorkerBase):
+    async def test_reply_is_plain_message_without_quote_and_blank_disclaimer_has_no_dash(self):
+        _save()
+        acc, w = _ready_worker(self)
+        with SessionLocal() as db:
+            a = db.get(type(acc), acc.id)
+            a.disclaimer_marker = "   "
+            db.commit()
+        ev = _event(msg_id=1, text="здравствуйте")
+        with patch.object(tw, "generate_reply", AsyncMock(return_value="Добрый день!")), \
+                patch.object(tw, "typing_seconds", return_value=0.0):
+            await w._on_message(ev)
+        ev.reply.assert_not_awaited()                                   # без «плашки»-цитаты
+        ev.respond.assert_awaited_once_with("Добрый день!")             # и без «—» в конце
 
 
 def _resp(status: int, payload=None, text=""):

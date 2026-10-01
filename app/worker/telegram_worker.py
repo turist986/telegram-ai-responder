@@ -791,12 +791,16 @@ class AccountWorker:
             self._note(event, "без ответа: за время ожидания аккаунт ушёл на паузу автостопа")
             return False  # за время ожидания другой чат поймал флуд — не отправляем
 
-        full_reply = f"{reply_text}\n\n— {disclaimer}" if show_disclaimer else reply_text
+        # пустой дисклеймер (например, очищенный в Excel/панели) — без одинокого «—» в конце ответа
+        disclaimer = (disclaimer or "").strip()
+        full_reply = f"{reply_text}\n\n— {disclaimer}" if show_disclaimer and disclaimer else reply_text
         try:
             input_chat = await event.get_input_chat()
             async with self.client.action(input_chat, "typing"):
                 await asyncio.sleep(typing_seconds(len(full_reply), pacing_cfg["typing_cps"]))
-            await event.reply(full_reply)
+            # respond, а не reply: обычное сообщение в чат, без цитаты сообщения клиента сверху —
+            # живой менеджер в личной переписке не отвечает «ответом на сообщение» каждый раз
+            await event.respond(full_reply)
         except FLOOD_ERRORS as exc:
             await self._register_flood(exc, "send")
             self._note(event, f"без ответа: Telegram ограничил отправку ({type(exc).__name__}) — автостоп")

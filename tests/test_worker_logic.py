@@ -33,7 +33,7 @@ def _event(chat_id=111, msg_id=10, age_seconds=0, text="привет"):
     return SimpleNamespace(
         is_private=True, out=False, chat_id=chat_id, sender=None, id=msg_id, raw_text=text,
         date=dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=age_seconds),
-        get_input_chat=AsyncMock(return_value="peer"), reply=AsyncMock(),
+        get_input_chat=AsyncMock(return_value="peer"), reply=AsyncMock(), respond=AsyncMock(),
     )
 
 
@@ -141,12 +141,12 @@ class FloodTests(WorkerBase):
         w.client.action = MagicMock(return_value=_Ctx())
         w._pacer.next_delay = MagicMock(return_value=0.0)
         ev = _event()
-        ev.reply = AsyncMock(side_effect=FloodWaitError(request=None, capture=50))
+        ev.respond = AsyncMock(side_effect=FloodWaitError(request=None, capture=50))
         with patch.object(tw, "generate_reply", AsyncMock(return_value="ответ")), \
              patch.object(tw, "typing_seconds", return_value=0.0):
             result = await w._process(ev)
         self.assertFalse(result)
-        self.assertEqual(ev.reply.await_count, 1)  # без повторной отправки
+        self.assertEqual(ev.respond.await_count, 1)  # без повторной отправки
         self.assertTrue(w.is_paused())
         with SessionLocal() as db:  # ответа нет в истории — значит, будет обработано после паузы
             self.assertEqual(db.query(DialogMessage).filter_by(account_id=acc.id, role="assistant").count(), 0)
@@ -166,7 +166,8 @@ class FloodTests(WorkerBase):
              patch.object(tw, "typing_seconds", return_value=0.0):
             result = await w._process(ev)
         self.assertTrue(result)
-        ev.reply.assert_awaited_once()
+        ev.respond.assert_awaited_once()
+        ev.reply.assert_not_awaited()  # без цитаты сообщения клиента
         w._pacer.next_delay.assert_called_once()
 
     def _ready(self):
