@@ -26,6 +26,10 @@ from ..models import Account, DialogMessage
 from ..services.blacklist import is_blacklisted
 from ..services.device_profile import client_kwargs as profile_client_kwargs
 from ..services.device_profile import OFFICIAL_DESKTOP_LANG_PACK, is_official_desktop
+from ..services.dialogs import ACTION_FOREVER as DIALOG_ACTION_FOREVER
+from ..services.dialogs import MODE_GENERAL as DIALOGS_MODE_GENERAL
+from ..services.dialogs import abandon_forever, get_general_rule, user_messages_since
+from ..services.dialogs import get_mode as get_dialogs_mode
 from ..services.disclaimer import build_disclaimer
 from ..services.flood_guard import compute_pause, next_streak
 from ..services.knowledge_base import load_knowledge_base, load_prompt_template
@@ -650,8 +654,14 @@ class AccountWorker:
             # админ мог захотеть ограничить именно ЭТОТ диалог, не трогая остальные). Слишком
             # длинный диалог часто значит, что клиенту пора к живому менеджеру (или что кто-то
             # испытывает бота на прочность) — после лимита ИИ молчит только в ЭТОМ чате.
-            dialog_cfg = get_protection(db)
-            limit_override, pause_override = get_chat_limit_override(db, account.id, chat_id)
+            if get_dialogs_mode(db) == DIALOGS_MODE_GENERAL:
+                if self._general_rule_blocks(db, event, account.id, chat_id):
+                    return False
+                limit_override = pause_override = None
+                dialog_cfg = {**get_protection(db), "dialog_limit_enabled": False}  # выборочные лимиты не действуют
+            else:
+                dialog_cfg = get_protection(db)
+                limit_override, pause_override = get_chat_limit_override(db, account.id, chat_id)
             manual_control = limit_override is not None or pause_override is not None
             # Пауза учитывается, только пока действует ручное управление ЭТИМ чатом (лимит
             # ИЛИ просто ручная «Пауза сейчас» без лимита) ИЛИ включена общая настройка —
@@ -823,6 +833,28 @@ class AccountWorker:
             if acc and is_llm_error_text(acc.last_error):
                 acc.last_error = None   # ответ ушёл — старая ошибка нейросети (например, неверный ключ) неактуальна
             db.commit()
+        return True
+
+    def _general_rule_blocks(self, db, event, account_id: int, chat_id: str) -> bool:
+        """Режим «Общая» (страница «Диалоги»): бот отвечает на первые N сообщений собеседника,
+        на следующее уже нет — чат брошен на время (пауза чата) или навсегда (чёрный список)."""
+        rule = get_general_rule(db)
+        now = dt.datetime.utcnow()
+        chat_pause = get_chat_pause_until(db, account_id, chat_id)
+        if chat_pause and chat_pause > now:
+            self._note(event, f"без ответа: чат брошен по общему правилу до {chat_pause:%d.%m %H:%M} UTC")
+            return True
+        if user_messages_since(db, account_id, chat_id, chat_pause) <= rule.limit:
+            return False
+        if rule.action == DIALOG_ACTION_FOREVER:
+            abandon_forever(db, account_id, chat_id, rule.limit)
+            self._note(event, f"без ответа: собеседник написал больше {rule.limit} сообщений — чат брошен "
+                              f"навсегда (в «Чёрном списке», вернуть можно там)")
+        else:
+            until = now + dt.timedelta(minutes=rule.pause_minutes)
+            set_chat_pause(db, account_id, chat_id, until)
+            self._note(event, f"без ответа: собеседник написал больше {rule.limit} сообщений — чат брошен "
+                              f"до {until:%d.%m %H:%M} UTC")
         return True
 
     def mark_dead(self, message: str):

@@ -8,7 +8,10 @@ from ..auth import require_login
 from ..database import get_db
 from ..models import Account
 from ..services.chat_status import pause_now, set_limit_override
-from ..services.dialogs import MAX_PAUSE_MINUTES, DialogOverrideError, list_active_dialogs, set_override
+from ..services.dialogs import (
+    MAX_PAUSE_MINUTES, MODE_GENERAL, DialogOverrideError, get_general_rule, get_mode, list_active_dialogs, save_mode,
+    set_override,
+)
 from ..services.settings_store import get_protection
 from ..templating import templates
 
@@ -25,8 +28,29 @@ async def dialogs_page(request: Request, user: str = Depends(require_login), db:
             "default_limit": get_protection(db)["dialog_message_limit"],
             "default_pause": get_protection(db)["dialog_pause_minutes"],
             "message": request.query_params.get("msg"),
+            "mode": get_mode(db),
+            "rule": get_general_rule(db),
+            "general": get_mode(db) == MODE_GENERAL,
         },
     )
+
+
+@router.post("/mode")
+async def set_dialogs_mode(
+    mode: str = Form("selective"),
+    limit: str = Form(""),
+    action: str = Form(""),
+    pause_value: str = Form(""),
+    pause_unit: str = Form("minutes"),
+    user: str = Depends(require_login),
+    db: Session = Depends(get_db),
+):
+    try:
+        save_mode(db, mode, limit, action, pause_value, pause_unit)
+    except DialogOverrideError as exc:
+        return RedirectResponse(f"/dialogs?msg={quote(str(exc))}", status_code=303)
+    text = "Режим: общая настройка — правило сохранено" if mode == MODE_GENERAL else "Режим: выборочная настройка"
+    return RedirectResponse(f"/dialogs?msg={quote(text)}", status_code=303)
 
 
 @router.post("/{account_id}/{chat_id}/set")

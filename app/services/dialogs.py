@@ -4,11 +4,12 @@
 import datetime as dt
 from dataclasses import dataclass
 
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from ..models import Account, ChatStatus, DialogMessage
+from ..models import Account, AccountBlacklist, ChatStatus, DialogMessage
 from .chat_status import set_limit_override
+from .settings_store import get_setting, set_setting
 
 
 class DialogOverrideError(ValueError):
@@ -17,6 +18,89 @@ class DialogOverrideError(ValueError):
 
 MAX_MESSAGE_LIMIT = 100_000
 MAX_PAUSE_MINUTES = 60 * 24 * 365  # год
+
+# Режим страницы «Диалоги»:
+#   selective — как было: у каждого чата свой ручной лимит/пауза (плюс общий лимит из
+#               «Настройки → Защита», если он включён там);
+#   general   — одно правило на все чаты: бот отвечает на первые N сообщений СОБЕСЕДНИКА в чате,
+#               на следующее уже нет — и бросает чат на заданное время или навсегда (тогда чат
+#               попадает в «Чёрный список» с пометкой, вернуть можно там же).
+MODE_SELECTIVE, MODE_GENERAL = "selective", "general"
+ACTION_PAUSE, ACTION_FOREVER = "pause", "forever"
+GENERAL_NOTE_PREFIX = "Общее правило «Диалоги»"
+_UNITS = {"minutes": 1, "hours": 60, "days": 60 * 24}
+
+
+@dataclass
+class GeneralRule:
+    limit: int = 10
+    action: str = ACTION_PAUSE
+    pause_minutes: int = 60 * 24
+
+    @property
+    def pause_display(self) -> tuple[int, str]:
+        """(число, единица) для формы: 1440 мин → (1, days), 90 мин → (90, minutes)."""
+        for unit in ("days", "hours"):
+            if self.pause_minutes % _UNITS[unit] == 0:
+                return self.pause_minutes // _UNITS[unit], unit
+        return self.pause_minutes, "minutes"
+
+
+def get_mode(db: Session) -> str:
+    return MODE_GENERAL if get_setting(db, "dialogs_mode") == MODE_GENERAL else MODE_SELECTIVE
+
+
+def get_general_rule(db: Session) -> GeneralRule:
+    rule = GeneralRule()
+    try:
+        rule.limit = max(1, int(get_setting(db, "general_dialog_limit") or rule.limit))
+        rule.pause_minutes = max(1, int(get_setting(db, "general_dialog_pause_minutes") or rule.pause_minutes))
+    except ValueError:
+        pass
+    if get_setting(db, "general_dialog_action") == ACTION_FOREVER:
+        rule.action = ACTION_FOREVER
+    return rule
+
+
+def save_mode(db: Session, mode: str, limit: str = "", action: str = "", pause_value: str = "",
+              pause_unit: str = "minutes") -> None:
+    """Сохраняет режим; для «Общей» — проверяет и сохраняет правило. Бросает DialogOverrideError."""
+    if mode not in (MODE_SELECTIVE, MODE_GENERAL):
+        raise DialogOverrideError("Неизвестный режим")
+    if mode == MODE_GENERAL:
+        if not (limit or "").strip().isdigit() or not 1 <= int(limit) <= MAX_MESSAGE_LIMIT:
+            raise DialogOverrideError(f"Количество сообщений: целое число от 1 до {MAX_MESSAGE_LIMIT}")
+        if action not in (ACTION_PAUSE, ACTION_FOREVER):
+            raise DialogOverrideError("Выберите, что делать с чатом после лимита: на время или навсегда")
+        if action == ACTION_PAUSE:
+            if pause_unit not in _UNITS or not (pause_value or "").strip().isdigit() or int(pause_value) < 1:
+                raise DialogOverrideError("Время паузы: целое число не меньше 1")
+            minutes = int(pause_value) * _UNITS[pause_unit]
+            if minutes > MAX_PAUSE_MINUTES:
+                raise DialogOverrideError("Время паузы: не больше года — для «навсегда» выберите вариант «навсегда»")
+            set_setting(db, "general_dialog_pause_minutes", str(minutes))
+        set_setting(db, "general_dialog_limit", str(int(limit)))
+        set_setting(db, "general_dialog_action", action)
+    set_setting(db, "dialogs_mode", mode)
+
+
+def user_messages_since(db: Session, account_id: int, chat_id: str, since: dt.datetime | None) -> int:
+    """Сколько сообщений написал СОБЕСЕДНИК в чате (ответы бота не считаются) — с конца прошлой
+    паузы, если она была: иначе после паузы чат сразу же снова «превышал» бы лимит."""
+    q = db.query(func.count(DialogMessage.id)).filter(
+        DialogMessage.account_id == account_id, DialogMessage.chat_id == chat_id, DialogMessage.role == "user")
+    if since is not None:
+        q = q.filter(DialogMessage.created_at >= since)
+    return q.scalar() or 0
+
+
+def abandon_forever(db: Session, account_id: int, chat_id: str, limit: int) -> None:
+    """«Навсегда»: чат в «Чёрный список» — там видно, почему, и оттуда его можно вернуть."""
+    exists = db.query(AccountBlacklist.id).filter_by(account_id=account_id, chat_id=chat_id).first()
+    if exists is None:
+        db.add(AccountBlacklist(account_id=account_id, chat_id=chat_id,
+                                note=f"{GENERAL_NOTE_PREFIX}: собеседник написал больше {limit} сообщений"))
+        db.commit()
 
 
 @dataclass
@@ -47,6 +131,9 @@ class DialogRow:
     def display_name(self) -> str | None:
         return self.status.display_name if self.status else None
 
+    user_count: int = 0
+    blacklisted: bool = False
+
 
 def list_active_dialogs(db: Session, limit: int = 100) -> list[DialogRow]:
     """Самые недавно активные диалоги (по последнему сообщению), по всем аккаунтам."""
@@ -55,6 +142,7 @@ def list_active_dialogs(db: Session, limit: int = 100) -> list[DialogRow]:
             DialogMessage.account_id,
             DialogMessage.chat_id,
             func.count(DialogMessage.id).label("message_count"),
+            func.sum(case((DialogMessage.role == "user", 1), else_=0)).label("user_count"),
             func.max(DialogMessage.created_at).label("last_at"),
         )
         .group_by(DialogMessage.account_id, DialogMessage.chat_id)
@@ -71,6 +159,8 @@ def list_active_dialogs(db: Session, limit: int = 100) -> list[DialogRow]:
     statuses: dict[tuple[int, str], ChatStatus] = {}
     for s in db.query(ChatStatus).filter(ChatStatus.account_id.in_(account_ids)).all():
         statuses[(s.account_id, s.chat_id)] = s
+    blacklisted = {(b.account_id, b.chat_id) for b in
+                   db.query(AccountBlacklist).filter(AccountBlacklist.account_id.in_(account_ids)).all()}
 
     result = []
     for row in agg:
@@ -83,6 +173,8 @@ def list_active_dialogs(db: Session, limit: int = 100) -> list[DialogRow]:
             message_count=row.message_count,
             last_at=row.last_at,
             status=statuses.get((row.account_id, row.chat_id)),
+            user_count=int(row.user_count or 0),
+            blacklisted=(row.account_id, row.chat_id) in blacklisted,
         ))
     return result
 

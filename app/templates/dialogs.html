@@ -5,12 +5,54 @@
   <div class="page-eyebrow">// system · dialogs</div>
   <h1>Диалоги</h1>
   <p>С какими собеседниками сейчас (или недавно) идёт переписка — по всем аккаунтам, самые свежие
-    сверху. Для любого диалога можно поставить свой лимит сообщений и свою паузу после него —
-    вместо общей настройки «Настройки → Защита» и независимо от того, включена ли она — или сразу
-    поставить диалог на паузу на N минут, не дожидаясь срабатывания лимита.</p>
+    сверху. Ограничение длины диалогов — общей настройкой (одно правило на все чаты) или выборочно
+    (свой лимит и пауза у каждого чата).</p>
 </div>
 
 {% if message %}<div class="alert alert-info">{{ message }}</div>{% endif %}
+
+<div class="card p-3 mb-3">
+  <form method="post" action="/dialogs/mode" id="mode-form">
+    <div class="d-flex flex-wrap gap-4 mb-2">
+      <div class="form-check">
+        <input class="form-check-input" type="radio" name="mode" id="mode-general" value="general" {{ "checked" if general else "" }}>
+        <label class="form-check-label" for="mode-general"><b>Общая настройка</b> — одно правило на все чаты</label>
+      </div>
+      <div class="form-check">
+        <input class="form-check-input" type="radio" name="mode" id="mode-selective" value="selective" {{ "" if general else "checked" }}>
+        <label class="form-check-label" for="mode-selective"><b>Выборочная</b> — свой лимит и пауза у каждого чата</label>
+      </div>
+    </div>
+
+    {% set pv, pu = rule.pause_display %}
+    <div id="general-fields" class="border rounded p-2 mb-2" {{ "" if general else "hidden" }}>
+      <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+        <span class="small">Бот отвечает на первые</span>
+        <input type="number" min="1" name="limit" value="{{ rule.limit }}" class="form-control form-control-sm" style="width:80px">
+        <span class="small">сообщений собеседника в чате, на следующее уже не отвечает и бросает чат:</span>
+      </div>
+      <div class="d-flex flex-wrap align-items-center gap-3">
+        <div class="form-check d-flex align-items-center gap-2">
+          <input class="form-check-input" type="radio" name="action" id="act-pause" value="pause" {{ "checked" if rule.action == "pause" else "" }}>
+          <label class="form-check-label small" for="act-pause">на</label>
+          <input type="number" min="1" name="pause_value" value="{{ pv }}" class="form-control form-control-sm" style="width:80px">
+          <select name="pause_unit" class="form-select form-select-sm" style="width:auto">
+            <option value="minutes" {{ "selected" if pu == "minutes" else "" }}>минут</option>
+            <option value="hours" {{ "selected" if pu == "hours" else "" }}>часов</option>
+            <option value="days" {{ "selected" if pu == "days" else "" }}>дней</option>
+          </select>
+        </div>
+        <div class="form-check">
+          <input class="form-check-input" type="radio" name="action" id="act-forever" value="forever" {{ "checked" if rule.action == "forever" else "" }}>
+          <label class="form-check-label small" for="act-forever">навсегда (чат уходит в «Чёрный список», вернуть можно там)</label>
+        </div>
+      </div>
+      <div class="section-hint mt-2">Считаются только сообщения собеседника, ответы бота — нет. После паузы счёт начинается заново.
+        В этом режиме ручные лимиты чатов и лимит из «Настройки → Защита» не действуют.</div>
+    </div>
+    <button class="btn btn-sm btn-primary">Сохранить режим</button>
+  </form>
+</div>
 
 <div class="term-window">
   <div class="term-titlebar">
@@ -24,7 +66,7 @@
   <table class="table table-sm align-middle mb-0">
     <thead><tr>
       <th>Аккаунт</th><th>Собеседник</th><th>Сообщений</th><th>Последнее</th><th style="min-width:190px">Статус</th>
-      <th style="width:340px">Ручной лимит / пауза для этого чата</th>
+      <th style="width:340px">{{ "Общее правило" if general else "Ручной лимит / пауза для этого чата" }}</th>
     </tr></thead>
     <tbody>
     {% for row in rows %}
@@ -37,17 +79,23 @@
         <td>{{ row.message_count }}</td>
         <td class="text-nowrap text-muted small">{{ row.last_at.strftime("%d.%m %H:%M") }}</td>
         <td class="small" style="min-width:190px">
-          {% if row.is_paused %}
-            <span class="text-warning">пауза до {{ row.paused_until.strftime("%H:%M:%S") }} UTC</span>
+          {% if row.blacklisted %}
+            <span class="text-danger">брошен навсегда (чёрный список)</span>
+          {% elif row.is_paused %}
+            <span class="text-warning">пауза до {{ row.paused_until.strftime("%d.%m %H:%M") }} UTC</span>
           {% else %}
             <span class="text-success">активен</span>
           {% endif %}
-          {% if row.message_limit_override or row.pause_minutes_override %}
+          {% if not general and (row.message_limit_override or row.pause_minutes_override) %}
             <br><span class="text-muted">ручной: {{ row.message_limit_override or ("по умолч. " ~ default_limit) }} /
             {{ row.pause_minutes_override or ("по умолч. " ~ default_pause) }} мин</span>
           {% endif %}
         </td>
         <td>
+          {% if general %}
+          <span class="small {{ 'text-danger' if row.user_count > rule.limit else 'text-muted' }}">
+            от собеседника: {{ row.user_count }} из {{ rule.limit }}</span>
+          {% else %}
           <div class="d-flex flex-wrap gap-1 align-items-center">
             <form method="post" action="/dialogs/{{ row.account.id }}/{{ row.chat_id }}/set" class="d-flex gap-1">
               <input type="number" min="1" name="message_limit" class="form-control form-control-sm" style="width:70px"
@@ -67,6 +115,7 @@
               <button class="btn btn-sm btn-outline-warning" title="Пауза сейчас"><i class="bi bi-pause-fill"></i></button>
             </form>
           </div>
+          {% endif %}
         </td>
       </tr>
     {% else %}
@@ -77,4 +126,12 @@
   </div>
   </div>
 </div>
+<script>
+(function () {
+  var fields = document.getElementById('general-fields');
+  document.querySelectorAll('input[name=mode]').forEach(function (r) {
+    r.addEventListener('change', function () { fields.hidden = !document.getElementById('mode-general').checked; });
+  });
+})();
+</script>
 {% endblock %}
