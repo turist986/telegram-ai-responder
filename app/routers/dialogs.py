@@ -9,8 +9,8 @@ from ..database import get_db
 from ..models import Account
 from ..services.chat_status import pause_now, set_limit_override
 from ..services.dialogs import (
-    MAX_PAUSE_MINUTES, MODE_GENERAL, DialogOverrideError, get_general_rule, get_mode, list_active_dialogs, save_mode,
-    set_override,
+    MAX_PAUSE_MINUTES, MODE_GENERAL, DialogOverrideError, get_general_rule, get_mode, limit_for, list_active_dialogs,
+    save_account_limits, save_mode, set_override,
 )
 from ..services.settings_store import get_protection
 from ..templating import templates
@@ -31,8 +31,23 @@ async def dialogs_page(request: Request, user: str = Depends(require_login), db:
             "mode": get_mode(db),
             "rule": get_general_rule(db),
             "general": get_mode(db) == MODE_GENERAL,
+            "accounts": db.query(Account).order_by(Account.identifier).all(),
+            "limit_for": limit_for,
         },
     )
+
+
+@router.post("/account-limits")
+async def set_account_limits(request: Request, user: str = Depends(require_login), db: Session = Depends(get_db)):
+    """Своё N у каждого аккаунта (поля limit_<id>); пустое поле — общее число."""
+    form = await request.form()
+    values = {int(k[6:]): str(v) for k, v in form.items() if k.startswith("limit_") and k[6:].isdigit()}
+    try:
+        own = save_account_limits(db, values)
+    except DialogOverrideError as exc:
+        return RedirectResponse(f"/dialogs?msg={quote(str(exc))}", status_code=303)
+    return RedirectResponse("/dialogs?msg=" + quote(f"Числа сообщений сохранены (своё у {own} аккаунтов)"),
+                            status_code=303)
 
 
 @router.post("/mode")

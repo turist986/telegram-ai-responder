@@ -28,7 +28,7 @@ from ..services.device_profile import client_kwargs as profile_client_kwargs
 from ..services.device_profile import OFFICIAL_DESKTOP_LANG_PACK, is_official_desktop
 from ..services.dialogs import ACTION_FOREVER as DIALOG_ACTION_FOREVER
 from ..services.dialogs import MODE_GENERAL as DIALOGS_MODE_GENERAL
-from ..services.dialogs import abandon_forever, get_general_rule, user_messages_since
+from ..services.dialogs import abandon_forever, get_general_rule, limit_for, user_messages_since
 from ..services.dialogs import get_mode as get_dialogs_mode
 from ..services.disclaimer import build_disclaimer
 from ..services.flood_guard import compute_pause, next_streak
@@ -655,7 +655,7 @@ class AccountWorker:
             # длинный диалог часто значит, что клиенту пора к живому менеджеру (или что кто-то
             # испытывает бота на прочность) — после лимита ИИ молчит только в ЭТОМ чате.
             if get_dialogs_mode(db) == DIALOGS_MODE_GENERAL:
-                if self._general_rule_blocks(db, event, account.id, chat_id):
+                if self._general_rule_blocks(db, event, account, chat_id):
                     return False
                 limit_override = pause_override = None
                 dialog_cfg = {**get_protection(db), "dialog_limit_enabled": False}  # выборочные лимиты не действуют
@@ -835,10 +835,13 @@ class AccountWorker:
             db.commit()
         return True
 
-    def _general_rule_blocks(self, db, event, account_id: int, chat_id: str) -> bool:
-        """Режим «Общая» (страница «Диалоги»): бот отвечает на первые N сообщений собеседника,
-        на следующее уже нет — чат брошен на время (пауза чата) или навсегда (чёрный список)."""
+    def _general_rule_blocks(self, db, event, account, chat_id: str) -> bool:
+        """Режим «Общая» (страница «Диалоги»): бот отвечает на первые N сообщений собеседника
+        (N свой у аккаунта или общий), на следующее уже нет — чат брошен на время (пауза чата)
+        или навсегда (чёрный список)."""
         rule = get_general_rule(db)
+        rule.limit = limit_for(rule, account)
+        account_id = account.id
         now = dt.datetime.utcnow()
         chat_pause = get_chat_pause_until(db, account_id, chat_id)
         if chat_pause and chat_pause > now:

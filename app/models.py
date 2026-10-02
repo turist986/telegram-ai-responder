@@ -40,6 +40,9 @@ class Account(Base):
     app_version = Column(String(32), nullable=True)
     lang_code = Column(String(16), nullable=True)
     system_lang_code = Column(String(16), nullable=True)
+    # Режим «Общая» на странице «Диалоги»: после скольких сообщений собеседника этот аккаунт
+    # бросает чат. Пусто — общее число из правила.
+    dialog_limit = Column(Integer, nullable=True)
     # Автостоп при FloodWait/PeerFlood: серия подряд, время последнего срабатывания, пауза до.
     flood_streak = Column(Integer, default=0, nullable=True)
     flood_last_at = Column(DateTime, nullable=True)

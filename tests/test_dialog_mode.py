@@ -81,6 +81,23 @@ class GeneralModeWorkerTests(WorkerBase):
             entry = db.query(AccountBlacklist).filter_by(account_id=acc.id, chat_id="111").one()
             self.assertIn("Общее правило", entry.note)
 
+    async def test_account_own_limit_overrides_general(self):
+        _save()
+        with SessionLocal() as db:
+            dg.save_mode(db, "general", "10", "forever")
+        acc, w = self._worker()
+        with SessionLocal() as db:
+            dg.save_account_limits(db, {acc.id: "2"})
+        events = await self._send(w, 1, 3)
+        self.assertEqual([e.respond.await_count for e in events], [1, 1, 0])     # своё N=2, а не общее 10
+        with SessionLocal() as db:
+            self.assertIn("больше 2", db.query(AccountBlacklist).filter_by(account_id=acc.id).one().note)
+            dg.save_account_limits(db, {acc.id: ""})                             # пусто — снова общее
+            self.assertIsNone(db.get(type(acc), acc.id).dialog_limit)
+            with self.assertRaises(dg.DialogOverrideError):
+                dg.save_account_limits(db, {acc.id: "5", 999999: "0"})
+            self.assertIsNone(db.get(type(acc), acc.id).dialog_limit)            # ошибка — ничего не сохранено
+
     async def test_selective_mode_ignores_general_rule(self):
         _save()
         with SessionLocal() as db:
@@ -132,5 +149,9 @@ class PageTests(WorkerBase):
         html = self.client.get("/dialogs").text
         self.assertIn("от собеседника: 1 из 5", html)
         self.assertNotIn('name="message_limit"', html)
+        self.assertIn(f'name="limit_{acc.id}"', html)                                # своё N у аккаунта
+        r = self.client.post("/dialogs/account-limits", data={f"limit_{acc.id}": "3"})
+        self.assertEqual(r.status_code, 303)
+        self.assertIn("от собеседника: 1 из 3 (своё у аккаунта)", self.client.get("/dialogs").text)
         r = self.client.post("/dialogs/mode", data={"mode": "general", "limit": "abc", "action": "forever"})
         self.assertIn("msg=", r.headers["location"])

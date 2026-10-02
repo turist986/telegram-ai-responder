@@ -46,6 +46,32 @@ class GeneralRule:
         return self.pause_minutes, "minutes"
 
 
+def limit_for(rule: GeneralRule, account) -> int:
+    """N для аккаунта: своё, если задано на странице «Диалоги», иначе общее из правила."""
+    return account.dialog_limit or rule.limit
+
+
+def save_account_limits(db: Session, values: dict[int, str]) -> int:
+    """{account_id: текст из формы}; пусто — общее число. Бросает DialogOverrideError, ничего не
+    сохраняя, если хоть одно значение некорректно. Возвращает число аккаунтов со своим N."""
+    parsed: dict[int, int | None] = {}
+    for account_id, raw in values.items():
+        raw = (raw or "").strip()
+        if not raw:
+            parsed[account_id] = None
+            continue
+        if not raw.isdigit() or not 1 <= int(raw) <= MAX_MESSAGE_LIMIT:
+            account = db.get(Account, account_id)
+            name = account.identifier if account else account_id
+            raise DialogOverrideError(f"Аккаунт {name}: число сообщений — целое от 1 до {MAX_MESSAGE_LIMIT} "
+                                      f"(или пусто — общее число)")
+        parsed[account_id] = int(raw)
+    for account in db.query(Account).filter(Account.id.in_(list(parsed))).all():
+        account.dialog_limit = parsed[account.id]
+    db.commit()
+    return sum(1 for v in parsed.values() if v)
+
+
 def get_mode(db: Session) -> str:
     return MODE_GENERAL if get_setting(db, "dialogs_mode") == MODE_GENERAL else MODE_SELECTIVE
 
